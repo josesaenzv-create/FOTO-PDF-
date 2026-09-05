@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Escáner de Expedientes - CREDIBAN</title>
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.3/babel.min.js"></script>
+    <!-- Librerías Originales Ultra-Rápidas -->
+    <script crossorigin="anonymous" src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin="anonymous" src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script crossorigin="anonymous" src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -36,23 +37,16 @@
 </head>
 <body class="bg-slate-50 font-sans min-h-screen text-slate-800">
     
+    <!-- PANTALLA DE CARGA (Desaparece sola al cargar la app) -->
     <div id="root">
         <div style="display: flex; height: 100vh; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px;">
             <div style="width: 60px; height: 60px; border: 6px solid #e2e8f0; border-top-color: #59B447; border-radius: 50%; animation: spin 1s linear infinite;"></div>
             <h2 style="margin-top: 24px; color: #334155; font-size: 20px; font-weight: bold;">Cargando Escáner...</h2>
-            <p style="color: #64748b; font-size: 14px; margin-top: 8px;">Conectando GPS y Entorno Seguro</p>
-            <div id="error-log" style="margin-top: 20px; color: #ef4444; font-size: 12px; font-weight: bold;"></div>
+            <p style="color: #64748b; font-size: 14px; margin-top: 8px;">Iniciando entorno seguro</p>
         </div>
     </div>
 
-    <script>
-        window.addEventListener('error', function(e) {
-            const el = document.getElementById('error-log');
-            if(el) el.innerText = "Error detectado: " + e.message + " (Toma captura y avísame)";
-        });
-    </script>
-
-    <script type="text/babel" data-presets="env,react">
+    <script type="text/babel">
         function EscanerApp() {
             // ==========================================
             // ESTADOS DE LA APLICACIÓN
@@ -388,4 +382,9 @@
                                         <rect x="31" y="79" width="75" height="13" rx="6.5" style={{animationDelay: "300ms"}} className="animate-pulse"/>
                                         <rect x="24" y="103" width="63" height="13" rx="6.5" style={{animationDelay: "400ms"}} className="animate-pulse"/>
                                         <rect x="37" y="128" width="24" height="13" rx="6.5" style={{animationDelay: "500ms"}} className="animate-pulse"/>
-                                        <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156
+                                        <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/>
+                                    </g>
+                                </svg>
+                            </div>
+                            <div className="flex flex-col justify-center text-left">
+                                <span className="text-[#59B447] font-bold tex
