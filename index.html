@@ -2,19 +2,17 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Escáner de Expedientes - CREDIBAN</title>
-    <!-- React y ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Tailwind CSS -->
+    
+    <!-- Librerías Ultra-Rápidas y Seguras -->
+    <script crossorigin="anonymous" src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin="anonymous" src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script crossorigin="anonymous" src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.3/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- jsPDF para generar el documento -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <!-- FontAwesome y Google Fonts -->
+    <script crossorigin="anonymous" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body {
@@ -130,6 +128,9 @@
             const galleryInputRef = React.useRef(null);
             const csvInputRef = React.useRef(null);
 
+            // CACHÉ DE CALLES PARA VELOCIDAD EXTREMA
+            const addressCache = React.useRef({});
+
             // ==========================================
             // MONITOR GPS EN SEGUNDO PLANO
             // ==========================================
@@ -139,7 +140,7 @@
                     watchId = navigator.geolocation.watchPosition(
                         (position) => setGpsGlobalStatus('listo'),
                         (error) => setGpsGlobalStatus('denegado'),
-                        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                        { enableHighAccuracy: true, maximumAge: 30000, timeout: 5000 }
                     );
                 } else {
                     setGpsGlobalStatus('denegado');
@@ -257,7 +258,7 @@
                 if (galleryInputRef.current) galleryInputRef.current.click();
             };
 
-            // OPENSTREETMAP: Función para transformar coordenadas a Dirección
+            // OPENSTREETMAP: Motor de Calles Optimizado (Milisegundos)
             const getGPSData = async () => {
                 return new Promise((resolve, reject) => {
                     if (!navigator.geolocation) return reject("Sin GPS");
@@ -265,25 +266,34 @@
                         async (pos) => {
                             const lat = pos.coords.latitude;
                             const lng = pos.coords.longitude;
+                            
+                            // Llave de caché basada en redondeo (Aprox. 11 metros)
+                            const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
                             let direccionStr = null;
                             
-                            try {
-                                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
-                                if(response.ok){
-                                    const data = await response.json();
-                                    if(data && data.address) {
-                                        const { road, pedestrian, suburb, house_number, city, town, village, state } = data.address;
-                                        const calle = road || pedestrian || suburb || '';
-                                        const distrito = city || town || village || '';
-                                        let tempDir = `${calle} ${house_number || ''}`.trim();
-                                        if (distrito) tempDir += `, ${distrito}`;
-                                        if (state) tempDir += ` - ${state}`;
-                                        direccionStr = tempDir.replace(/^[,\s]+|[,\s]+$/g, '');
-                                    } else if(data && data.display_name) {
-                                        direccionStr = data.display_name.split(',').slice(0, 3).join(',');
+                            // Revisa si ya busco esa calle hace unos segundos
+                            if (addressCache.current[cacheKey]) {
+                                direccionStr = addressCache.current[cacheKey];
+                            } else {
+                                try {
+                                    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+                                    if(response.ok){
+                                        const data = await response.json();
+                                        if(data && data.address) {
+                                            const { road, pedestrian, suburb, house_number, city, town, village, state } = data.address;
+                                            const calle = road || pedestrian || suburb || '';
+                                            const distrito = city || town || village || '';
+                                            let tempDir = `${calle} ${house_number || ''}`.trim();
+                                            if (distrito) tempDir += `, ${distrito}`;
+                                            if (state) tempDir += ` - ${state}`;
+                                            direccionStr = tempDir.replace(/^[,\s]+|[,\s]+$/g, '');
+                                        } else if(data && data.display_name) {
+                                            direccionStr = data.display_name.split(',').slice(0, 3).join(',');
+                                        }
+                                        addressCache.current[cacheKey] = direccionStr; // Guardar en caché
                                     }
-                                }
-                            } catch(e) { console.warn("Error resolviendo calle", e); }
+                                } catch(e) { console.warn("Error resolviendo calle", e); }
+                            }
                             
                             resolve({
                                 lat, lng,
@@ -294,7 +304,7 @@
                             });
                         },
                         (err) => reject(err),
-                        { enableHighAccuracy: true, timeout: 15000 }
+                        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 } // maximumAge hace que devuelva instantáneo si ya estaba activo
                     );
                 });
             };
@@ -308,7 +318,7 @@
                 setPreview(null);
                 setStep(3); 
 
-                if (activeSlot.source === 'camera') {
+                if (activeSlot && activeSlot.source === 'camera') {
                     setIsGettingGps(true);
                     getGPSData().then(data => {
                         setCurrentGps(data);
@@ -322,120 +332,128 @@
                     });
                 } else {
                     setCurrentGps(null);
-                    setIsGettingGps(false); // Seguro antifallos
+                    setIsGettingGps(false); 
                 }
                 e.target.value = ''; 
             };
 
-            const generatePreview = (file, source, angle, gps, clienteNombre) => {
+            // MOTOR VISUAL ANTI-PANTALLA BLANCA (URL.createObjectURL)
+            const generatePreview = (file, source, angle, gps, clienteNombre, asesorNombre) => {
                 return new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = (evt) => {
-                        const img = new Image();
-                        img.onload = () => {
-                            // MICRO-RETRASO para que navegadores móviles (iOS/Chrome) tengan tiempo de decodificar la RAM
-                            setTimeout(() => {
-                                try {
-                                    const canvas = document.createElement('canvas');
-                                    const ctx = canvas.getContext('2d');
-                                    
-                                    // REDIMENSIÓN DE SEGURIDAD (Evita Pantalla Blanca en Galería)
-                                    // Bajamos el límite a 1600 para proteger dispositivos gama media/baja
-                                    let targetWidth = img.width;
-                                    let targetHeight = img.height;
-                                    const MAX_DIM = 1600;
-                                    if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
-                                        const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
-                                        targetWidth = Math.floor(targetWidth * ratio);
-                                        targetHeight = Math.floor(targetHeight * ratio);
-                                    }
-
-                                    if (angle % 180 !== 0) {
-                                        canvas.width = targetHeight;
-                                        canvas.height = targetWidth;
-                                    } else {
-                                        canvas.width = targetWidth;
-                                        canvas.height = targetHeight;
-                                    }
-
-                                    // FONDO BLANCO SÓLIDO (Seguridad para fotos transparentes)
-                                    ctx.fillStyle = '#ffffff';
-                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                                    // ROTACIÓN Y DIBUJO
-                                    ctx.translate(canvas.width/2, canvas.height/2);
-                                    ctx.rotate((angle * Math.PI) / 180);
-                                    ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
-                                    ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-                                    // SELLO DE AGUA Y CALLES
-                                    if (source === 'camera' && gps) {
-                                        const fontSize = Math.max(22, canvas.width * 0.025);
-                                        ctx.font = `bold ${fontSize}px Arial`;
-                                        ctx.textAlign = "right";
-                                        ctx.textBaseline = "bottom";
-                                        
-                                        const margin = fontSize;
-                                        let startY = canvas.height - margin;
-                                        const lines = [];
-                                        
-                                        lines.push(gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`);
-                                        
-                                        if (!gps.error) {
-                                            if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
-                                            if (gps.direccion) {
-                                                const parts = gps.direccion.match(/.{1,45}(\s|$)/g) || [];
-                                                parts.reverse().forEach(p => lines.push(p.trim()));
-                                            } else {
-                                                lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
-                                            }
-                                        }
-                                        
-                                        // Integración inteligente del nombre del cliente
-                                        if (clienteNombre) lines.push(`Cliente: ${clienteNombre.trim().toUpperCase()}`);
-                                        if (asesor) lines.push(`Asesor: ${asesor.trim().toUpperCase()}`);
-                                        lines.push(`CREDIBAN PERÚ - Trabajo de Campo`);
-
-                                        lines.forEach(line => {
-                                            ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-                                            ctx.lineWidth = fontSize * 0.25;
-                                            ctx.lineJoin = 'round';
-                                            ctx.strokeText(line, canvas.width - margin, startY);
-                                            ctx.fillStyle = '#facc15'; 
-                                            ctx.fillText(line, canvas.width - margin, startY);
-                                            startY -= (fontSize * 1.3);
-                                        });
-                                    }
-                                    resolve(canvas.toDataURL('image/jpeg', 0.85));
-                                } catch (e) {
-                                    reject(e);
+                    const img = new Image();
+                    // Este método evita saturar la RAM con base64 y carga la foto al instante
+                    const objectUrl = URL.createObjectURL(file); 
+                    
+                    img.onload = () => {
+                        URL.revokeObjectURL(objectUrl); // Libera memoria instantáneamente
+                        
+                        // Retraso minúsculo para que React logre mostrar el "Procesando"
+                        setTimeout(() => {
+                            try {
+                                const canvas = document.createElement('canvas');
+                                const ctx = canvas.getContext('2d');
+                                
+                                // Redimensión conservadora para no crashear celulares al rotar
+                                let targetWidth = img.width;
+                                let targetHeight = img.height;
+                                const MAX_DIM = 1200; 
+                                
+                                if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
+                                    const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
+                                    targetWidth = Math.floor(targetWidth * ratio);
+                                    targetHeight = Math.floor(targetHeight * ratio);
                                 }
-                            }, 50); // Fin del micro-retraso
-                        };
-                        img.onerror = () => reject("Error al cargar la imagen nativa");
-                        img.src = evt.target.result;
+
+                                if (angle % 180 !== 0) {
+                                    canvas.width = targetHeight;
+                                    canvas.height = targetWidth;
+                                } else {
+                                    canvas.width = targetWidth;
+                                    canvas.height = targetHeight;
+                                }
+
+                                // FONDO BLANCO SÓLIDO OBLIGATORIO
+                                ctx.fillStyle = '#ffffff';
+                                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                                // ROTACIÓN Y DIBUJO
+                                ctx.translate(canvas.width/2, canvas.height/2);
+                                ctx.rotate((angle * Math.PI) / 180);
+                                ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
+                                ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+                                // SELLO DE AGUA, CALLES Y NOMBRES
+                                if (source === 'camera' && gps) {
+                                    const fontSize = Math.max(18, canvas.width * 0.025);
+                                    ctx.font = `bold ${fontSize}px Arial`;
+                                    ctx.textAlign = "right";
+                                    ctx.textBaseline = "bottom";
+                                    
+                                    const margin = fontSize;
+                                    let startY = canvas.height - margin;
+                                    const lines = [];
+                                    
+                                    lines.push(gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`);
+                                    
+                                    if (!gps.error) {
+                                        if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
+                                        if (gps.direccion) {
+                                            const parts = gps.direccion.match(/.{1,45}(\s|$)/g) || [];
+                                            parts.reverse().forEach(p => lines.push(p.trim()));
+                                        } else {
+                                            lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
+                                        }
+                                    }
+                                    
+                                    // Integración explícita del Cliente y Asesor
+                                    if (clienteNombre) lines.push(`Cliente: ${clienteNombre.trim().toUpperCase()}`);
+                                    if (asesorNombre) lines.push(`Asesor: ${asesorNombre.trim().toUpperCase()}`);
+                                    lines.push(`CREDIBAN PERÚ - Trabajo de Campo`);
+
+                                    lines.forEach(line => {
+                                        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+                                        ctx.lineWidth = fontSize * 0.25;
+                                        ctx.lineJoin = 'round';
+                                        ctx.strokeText(line, canvas.width - margin, startY);
+                                        ctx.fillStyle = '#facc15'; 
+                                        ctx.fillText(line, canvas.width - margin, startY);
+                                        startY -= (fontSize * 1.3);
+                                    });
+                                }
+                                resolve(canvas.toDataURL('image/jpeg', 0.85));
+                            } catch (e) {
+                                reject(e);
+                            }
+                        }, 50); 
                     };
-                    reader.onerror = () => reject("Error al leer archivo");
-                    reader.readAsDataURL(file);
+                    img.onerror = () => reject("Error al cargar la imagen nativa");
+                    img.src = objectUrl;
                 });
             };
 
+            // DISPARADOR DE IMAGEN (Sin colisiones)
             React.useEffect(() => {
+                let isMounted = true;
                 if (step === 3 && currentFile && !isGettingGps) {
                     setIsProcessingImage(true);
-                    generatePreview(currentFile, activeSlot.source, rotation, currentGps, `${nombre} ${apellido}`)
+                    generatePreview(currentFile, activeSlot?.source, rotation, currentGps, `${nombre} ${apellido}`, asesor)
                         .then(dataUrl => {
-                            setPreview(dataUrl);
-                            setIsProcessingImage(false);
+                            if (isMounted) {
+                                setPreview(dataUrl);
+                                setIsProcessingImage(false);
+                            }
                         })
                         .catch(err => {
-                            console.error(err);
-                            alert("No se pudo procesar la imagen (Memoria saturada).");
-                            setIsProcessingImage(false);
-                            setStep(2);
+                            if (isMounted) {
+                                console.error(err);
+                                alert("No se pudo procesar la imagen.");
+                                setIsProcessingImage(false);
+                                setStep(2);
+                            }
                         });
                 }
-            }, [currentFile, rotation, currentGps, isGettingGps, step]); // Dependencias revisadas
+                return () => { isMounted = false; };
+            }, [currentFile, rotation, currentGps, isGettingGps, step, nombre, apellido, asesor, activeSlot]);
 
             const aceptarHoja = () => {
                 if (activeSlot !== null && preview) {
@@ -722,12 +740,12 @@
                             {isGettingGps ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
                                     <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-satellite-dish text-[#59B447]"></i></div>
-                                    <span className="font-semibold">Buscando Calles (GPS)...</span>
+                                    <span className="font-semibold">Capturando Calle (GPS)...</span>
                                 </div>
                             ) : isProcessingImage ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
                                     <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-spinner fa-spin text-[#59B447]"></i></div>
-                                    <span className="font-semibold">Procesando y Sincronizando...</span>
+                                    <span className="font-semibold">Procesando Foto...</span>
                                 </div>
                             ) : preview ? (
                                 <img src={preview} alt="Previsualización" className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg border border-slate-700" />
