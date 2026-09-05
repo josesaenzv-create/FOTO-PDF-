@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Escáner de Expedientes - CREDIBAN</title>
+    <!-- React y ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- jsPDF para generar el documento -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- FontAwesome y Google Fonts -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            background-color: #f8fafc;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+        }
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-3px); }
+            100% { transform: translateY(0px); }
+        }
+        .logo-hover:hover svg { animation: float 2s ease-in-out infinite; }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans min-h-screen text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        function EscanerApp() {
+            // ==========================================
+            // ESTADO INTACTO (Lógica Original)
+            // ==========================================
+            const [nombre, setNombre] = React.useState('');
+            const [apellido, setApellido] = React.useState('');
+            const [dni, setDni] = React.useState('');
+            
+            const [step, setStep] = React.useState(1);
+            const [pages, setPages] = React.useState([]);
+            
+            const [activeSlot, setActiveSlot] = React.useState(null); 
+            const [currentFile, setCurrentFile] = React.useState(null);
+            const [currentGps, setCurrentGps] = React.useState(null);
+            const [rotation, setRotation] = React.useState(0);
+            
+            const [preview, setPreview] = React.useState(null);
+            const [isGettingGps, setIsGettingGps] = React.useState(false);
+            const [isProcessingImage, setIsProcessingImage] = React.useState(false);
+            const [isGenerating, setIsGenerating] = React.useState(false);
+            
+            // NUEVO ESTADO: Monitor GPS Global
+            const [gpsGlobalStatus, setGpsGlobalStatus] = React.useState('buscando');
+            
+            const cameraInputRef = React.useRef(null);
+            const galleryInputRef = React.useRef(null);
+
+            // ==========================================
+            // EFECTO: Monitor GPS en tiempo real
+            // ==========================================
+            React.useEffect(() => {
+                let watchId;
+                if ("geolocation" in navigator) {
+                    watchId = navigator.geolocation.watchPosition(
+                        (position) => setGpsGlobalStatus('listo'),
+                        (error) => setGpsGlobalStatus('denegado'),
+                        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                    );
+                } else {
+                    setGpsGlobalStatus('denegado');
+                }
+                return () => {
+                    if (watchId) navigator.geolocation.clearWatch(watchId);
+                };
+            }, []);
+
+            // ==========================================
+            // FUNCIONES INTACTAS (Lógica Original)
+            // ==========================================
+            const iniciarEscaner = (e) => {
+                e.preventDefault();
+                if (!nombre || !apellido || !dni) {
+                    alert("Por favor completa los datos del cliente.");
+                    return;
+                }
+                if (pages.length === 0) addPage(1);
+                setStep(2);
+            };
+
+            const addPage = (layout) => {
+                setPages([...pages, { id: Date.now(), layout: layout, images: Array(layout).fill(null) }]);
+            };
+
+            const removePage = (pageIndex) => {
+                if(confirm("¿Seguro que deseas eliminar esta hoja completa del documento?")){
+                    const newPages = [...pages];
+                    newPages.splice(pageIndex, 1);
+                    setPages(newPages);
+                }
+            };
+
+            const openCamera = (pageIdx, imgIdx) => {
+                setActiveSlot({ pageIndex: pageIdx, photoIndex: imgIdx, source: 'camera' });
+                if (cameraInputRef.current) cameraInputRef.current.click();
+            };
+
+            const openGallery = (pageIdx, imgIdx) => {
+                setActiveSlot({ pageIndex: pageIdx, photoIndex: imgIdx, source: 'gallery' });
+                if (galleryInputRef.current) galleryInputRef.current.click();
+            };
+
+            const getGPS = () => {
+                return new Promise((resolve, reject) => {
+                    if (!navigator.geolocation) return reject("Navegador sin GPS");
+                    navigator.geolocation.getCurrentPosition(
+                        pos => resolve(pos),
+                        err => reject(err),
+                        { enableHighAccuracy: true, timeout: 10000 }
+                    );
+                });
+            };
+
+            const handleFileSelected = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setCurrentFile(file);
+                setRotation(0);
+                setPreview(null);
+                setStep(3); 
+
+                if (activeSlot.source === 'camera') {
+                    setIsGettingGps(true);
+                    try {
+                        const pos = await getGPS();
+                        setCurrentGps({
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude,
+                            alt: pos.coords.altitude || null,
+                            acc: pos.coords.accuracy,
+                            time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                        });
+                    } catch (err) {
+                        setCurrentGps({
+                            error: "GPS No Disponible",
+                            time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                        });
+                    }
+                    setIsGettingGps(false);
+                } else {
+                    setCurrentGps(null);
+                }
+                e.target.value = ''; 
+            };
+
+            const generatePreview = (file, source, angle, gps) => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            const ctx = canvas.getContext('2d');
+                            
+                            let targetWidth = img.width;
+                            let targetHeight = img.height;
+                            const MAX_DIM = 2500;
+                            if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
+                                const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
+                                targetWidth *= ratio;
+                                targetHeight *= ratio;
+                            }
+
+                            if (angle % 180 !== 0) {
+                                canvas.width = targetHeight;
+                                canvas.height = targetWidth;
+                            } else {
+                                canvas.width = targetWidth;
+                                canvas.height = targetHeight;
+                            }
+
+                            ctx.translate(canvas.width/2, canvas.height/2);
+                            ctx.rotate((angle * Math.PI) / 180);
+                            ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
+                            
+                            ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+                            if (source === 'camera' && gps) {
+                                const fontSize = Math.max(24, canvas.width * 0.025);
+                                ctx.font = `bold ${fontSize}px Arial`;
+                                ctx.textAlign = "right";
+                                ctx.textBaseline = "bottom";
+                                
+                                const margin = fontSize;
+                                let startY = canvas.height - margin;
+                                
+                                const lines = [
+                                    `CREDIBAN PERÚ - Trabajo de Campo`,
+                                    gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`,
+                                ];
+                                
+                                if (!gps.error) {
+                                    lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
+                                    if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
+                                }
+
+                                lines.reverse().forEach(line => {
+                                    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+                                    ctx.lineWidth = fontSize * 0.2;
+                                    ctx.strokeText(line, canvas.width - margin, startY);
+                                    ctx.fillStyle = '#facc15'; 
+                                    ctx.fillText(line, canvas.width - margin, startY);
+                                    startY -= (fontSize * 1.2);
+                                });
+                            }
+                            resolve(canvas.toDataURL('image/jpeg', 0.85));
+                        };
+                        img.src = evt.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            };
+
+            React.useEffect(() => {
+                if (step === 3 && currentFile && !isGettingGps) {
+                    setIsProcessingImage(true);
+                    generatePreview(currentFile, activeSlot.source, rotation, currentGps)
+                        .then(dataUrl => {
+                            setPreview(dataUrl);
+                            setIsProcessingImage(false);
+                        });
+                }
+            }, [currentFile, rotation, currentGps, isGettingGps, step]);
+
+            const aceptarHoja = () => {
+                if (activeSlot !== null && preview) {
+                    const newPages = [...pages];
+                    newPages[activeSlot.pageIndex].images[activeSlot.photoIndex] = preview;
+                    setPages(newPages);
+                }
+                setPreview(null);
+                setCurrentFile(null);
+                setActiveSlot(null);
+                setStep(2);
+            };
+
+            const descartarHoja = () => {
+                setPreview(null);
+                setCurrentFile(null);
+                setActiveSlot(null);
+                setStep(2);
+            };
+
+            const removePhoto = (pageIdx, imgIdx) => {
+                const newPages = [...pages];
+                newPages[pageIdx].images[imgIdx] = null;
+                setPages(newPages);
+            };
+
+            const generarYEnviarPDF = async () => {
+                const hasPhotos = pages.some(p => p.images.some(img => img !== null));
+                if (!hasPhotos) {
+                    alert("El documento está vacío. Añade fotos primero.");
+                    return;
+                }
+                setIsGenerating(true);
+                try {
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF('p', 'mm', 'a4');
+                    const pageWidth = doc.internal.pageSize.getWidth();
+                    const pageHeight = doc.internal.pageSize.getHeight();
+                    const margin = 10;
+                    
+                    let pagesAdded = 0;
+
+                    for (let p = 0; p < pages.length; p++) {
+                        const pageData = pages[p];
+                        if (pageData.images.every(img => img === null)) continue;
+                        
+                        if (pagesAdded > 0) doc.addPage();
+                        pagesAdded++;
+
+                        for (let i = 0; i < pageData.images.length; i++) {
+                            const imgData = pageData.images[i];
+                            if (!imgData) continue; 
+
+                            const imgProps = doc.getImageProperties(imgData);
+                            let boxX, boxY, boxW, boxH;
+
+                            if (pageData.layout === 1) {
+                                boxX = margin;
+                                boxY = margin;
+                                boxW = pageWidth - (margin * 2);
+                                boxH = pageHeight - (margin * 2);
+                            } else if (pageData.layout === 2) {
+                                boxW = pageWidth - (margin * 2);
+                                boxH = (pageHeight - (margin * 3)) / 2;
+                                boxX = margin;
+                                boxY = margin + (i * (boxH + margin));
+                            } else if (pageData.layout === 4) {
+                                boxW = (pageWidth - (margin * 3)) / 2;
+                                boxH = (pageHeight - (margin * 3)) / 2;
+                                const col = i % 2;
+                                const row = Math.floor(i / 2);
+                                boxX = margin + (col * (boxW + margin));
+                                boxY = margin + (row * (boxH + margin));
+                            }
+
+                            let renderW = boxW;
+                            let renderH = (imgProps.height * renderW) / imgProps.width;
+                            
+                            if (renderH > boxH) {
+                                renderH = boxH;
+                                renderW = (imgProps.width * renderH) / imgProps.height;
+                            }
+                            
+                            const xOffset = boxX + (boxW - renderW) / 2;
+                            const yOffset = boxY + (boxH - renderH) / 2;
+
+                            doc.addImage(imgData, 'JPEG', xOffset, yOffset, renderW, renderH, undefined, 'FAST');
+                            doc.setDrawColor(200);
+                            doc.rect(boxX, boxY, boxW, boxH);
+                        }
+                    }
+
+                    const pdfBlob = doc.output('blob');
+                    const hoy = new Date();
+                    const fileName = `${String(hoy.getDate()).padStart(2, '0')}-${String(hoy.getMonth() + 1).padStart(2, '0')}_${nombre.trim().replace(/\s+/g, '')}_${apellido.trim().replace(/\s+/g, '')}-${dni.trim()}.pdf`;
+                    
+                    const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+                    const txtMsg = `Estimado cliente, adjunto su expediente digitalizado.\nTitular: ${nombre} ${apellido}\nDNI: ${dni}`;
+
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        await navigator.share({ files: [file], title: `Expediente CREDIBAN`, text: txtMsg });
+                    } else {
+                        const url = URL.createObjectURL(pdfBlob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = fileName;
+                        a.click();
+                        const msg = encodeURIComponent(`${txtMsg}\n(Favor de adjuntar el PDF descargado manualmente).`);
+                        window.open(`https://wa.me/?text=${msg}`, '_blank');
+                    }
+                } catch (error) {
+                    console.error("Error:", error);
+                    alert("Error al generar PDF.");
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            // ==========================================
+            // COMPONENTE HEADER - CON INDICADOR GPS
+            // ==========================================
+            const Header = () => (
+                <header className="bg-white shadow-sm border-b border-slate-200 py-3 px-4 w-full z-50">
+                    <div className="max-w-7xl mx-auto flex items-center justify-between">
+                        
+                        {/* Logo */}
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 md:w-12 h-auto flex-shrink-0 logo-hover">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240" className="w-full h-full">
+                                    <g fill="#59B447">
+                                        <rect x="90" y="8" width="24" height="13" rx="6.5" className="animate-pulse"/>
+                                        <rect x="71" y="31" width="61" height="13" rx="6.5" style={{animationDelay: "100ms"}} className="animate-pulse"/>
+                                        <rect x="50" y="55" width="74" height="13" rx="6.5" style={{animationDelay: "200ms"}} className="animate-pulse"/>
+                                        <rect x="31" y="79" width="75" height="13" rx="6.5" style={{animationDelay: "300ms"}} className="animate-pulse"/>
+                                        <rect x="24" y="103" width="63" height="13" rx="6.5" style={{animationDelay: "400ms"}} className="animate-pulse"/>
+                                        <rect x="37" y="128" width="24" height="13" rx="6.5" style={{animationDelay: "500ms"}} className="animate-pulse"/>
+                                        <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/>
+                                    </g>
+                                </svg>
+                            </div>
+                            <div className="flex flex-col justify-center text-left">
+                                <span className="text-[#59B447] font-bold text-xl md:text-3xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
+                                <span className="text-[#59B447] font-bold text-[8px] md:text-[11px] leading-tight tracking-wide mt-1 uppercase" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>empieza a construir tus sueños</span>
+                            </div>
+                        </div>
+
+                        {/* Botón Indicador GPS Inteligente */}
+                        <div className={`f
