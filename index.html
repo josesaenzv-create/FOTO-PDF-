@@ -2,17 +2,19 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Escáner de Expedientes - CREDIBAN</title>
-    
-    <!-- LIBRERÍAS PURAS (Sin bloqueos de operadoras) -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- React y ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- jsPDF para generar el documento -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- FontAwesome y Google Fonts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body {
@@ -32,40 +34,81 @@
             100% { transform: translateY(0px); }
         }
         .logo-hover:hover svg { animation: float 2s ease-in-out infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Ocultar barra de scroll para un aspecto más nativo */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
 </head>
 <body class="bg-slate-50 font-sans min-h-screen text-slate-800">
-
-    <!-- PANTALLA DE CARGA AISLADA -->
-    <div id="loader-container" style="display: flex; height: 100vh; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: fixed; width: 100%; top: 0; left: 0; background-color: #f8fafc; z-index: 9999;">
-        <div style="width: 60px; height: 60px; border: 6px solid #e2e8f0; border-top-color: #59B447; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-        <h2 style="margin-top: 24px; color: #334155; font-size: 20px; font-weight: bold;">Iniciando Sistema...</h2>
-        <p style="color: #64748b; font-size: 14px; margin-top: 8px;">Conectando con CREDIBAN</p>
-        <div id="error-log" style="color: #ef4444; margin-top: 20px; font-size: 12px; font-weight: bold; max-width: 80%;"></div>
-    </div>
-
-    <!-- AQUÍ SE RENDERIZA LA APLICACIÓN -->
     <div id="root"></div>
 
-    <script>
-        window.addEventListener('error', function(e) {
-            const log = document.getElementById('error-log');
-            if(log) log.innerHTML += "Falla de red detectada. Recarga la página.<br>";
-        });
-    </script>
-
     <script type="text/babel">
-        function EscanerApp() {
-            React.useEffect(() => {
-                const loader = document.getElementById('loader-container');
-                if (loader) loader.style.display = 'none';
-            }, []);
+        // ==========================================
+        // MOTOR DE BASE DE DATOS LOCAL (IndexedDB)
+        // ==========================================
+        const DB_NAME = 'CredibanExpedientesDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'expedientes';
 
-            // ==========================================
-            // ESTADOS DE LA APLICACIÓN
-            // ==========================================
-            const [nombreAsesor, setNombreAsesor] = React.useState(''); // NUEVO ESTADO: Asesor
+        const initDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        };
+
+        const saveExpediente = async (expediente) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                store.put(expediente);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        };
+
+        const getExpedientes = async () => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    // Ordenar del más reciente al más antiguo
+                    const result = request.result.sort((a, b) => b.timestamp - a.timestamp);
+                    resolve(result);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        };
+
+        const deleteExpediente = async (id) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                store.delete(id);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        };
+
+        function EscanerApp() {
+            // NAVEGACIÓN
+            const [currentTab, setCurrentTab] = React.useState('scanner'); // 'scanner' | 'history'
+            const [historyData, setHistoryData] = React.useState([]);
+
+            // ESTADOS DEL ESCÁNER
             const [nombre, setNombre] = React.useState('');
             const [apellido, setApellido] = React.useState('');
             const [dni, setDni] = React.useState('');
@@ -83,37 +126,103 @@
             const [isProcessingImage, setIsProcessingImage] = React.useState(false);
             const [isGenerating, setIsGenerating] = React.useState(false);
             
-            const [gpsGlobalStatus, setGpsGlobalStatus] = React.useState('buscando');
-            
             const cameraInputRef = React.useRef(null);
             const galleryInputRef = React.useRef(null);
+            const csvInputRef = React.useRef(null);
 
             // ==========================================
-            // MONITOR GPS
+            // LÓGICA DE HISTORIAL Y RESPALDO CSV
             // ==========================================
-            React.useEffect(() => {
-                let watchId;
-                if ("geolocation" in navigator) {
-                    watchId = navigator.geolocation.watchPosition(
-                        (position) => setGpsGlobalStatus('listo'),
-                        (error) => setGpsGlobalStatus('denegado'),
-                        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
-                    );
-                } else {
-                    setGpsGlobalStatus('denegado');
+            const loadHistory = async () => {
+                try {
+                    const data = await getExpedientes();
+                    setHistoryData(data);
+                } catch (error) {
+                    console.error("Error cargando historial", error);
                 }
-                return () => {
-                    if (watchId) navigator.geolocation.clearWatch(watchId);
+            };
+
+            React.useEffect(() => {
+                if (currentTab === 'history') {
+                    loadHistory();
+                }
+            }, [currentTab]);
+
+            const handleDeleteRecord = async (id) => {
+                if (confirm("¿Estás seguro de eliminar este expediente de tu registro local?")) {
+                    await deleteExpediente(id);
+                    loadHistory();
+                }
+            };
+
+            const handleOpenPDF = (blob, fileName) => {
+                if (!blob) {
+                    alert("El archivo PDF no está disponible. Es posible que este registro se haya importado desde un CSV que solo contiene el texto, no los archivos.");
+                    return;
+                }
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.click();
+            };
+
+            const exportCSV = () => {
+                if (historyData.length === 0) {
+                    alert("No hay expedientes para respaldar.");
+                    return;
+                }
+                let csv = "ID,Nombre,DNI,Fecha\n";
+                historyData.forEach(r => {
+                    csv += `"${r.id}","${r.nombre}","${r.dni}","${r.fecha}"\n`;
+                });
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Crediban_Respaldo_${new Date().getTime()}.csv`;
+                a.click();
+            };
+
+            const importCSV = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    const text = evt.target.result;
+                    const lines = text.split('\n');
+                    let count = 0;
+                    for (let i = 1; i < lines.length; i++) {
+                        if (!lines[i].trim()) continue;
+                        const match = lines[i].match(/"([^"]+)","([^"]+)","([^"]+)","([^"]+)"/);
+                        if (match) {
+                            const record = {
+                                id: match[1],
+                                nombre: match[2],
+                                dni: match[3],
+                                fecha: match[4],
+                                timestamp: parseInt(match[1]) || Date.now(),
+                                pdfBlob: null,
+                                fileName: `Expediente_Recuperado_${match[3]}.pdf`
+                            };
+                            await saveExpediente(record);
+                            count++;
+                        }
+                    }
+                    alert(`✅ Se restauraron ${count} registros desde el CSV.`);
+                    loadHistory();
                 };
-            }, []);
+                reader.readAsText(file);
+                e.target.value = '';
+            };
 
             // ==========================================
-            // FUNCIONES LÓGICAS
+            // LÓGICA DE ESCÁNER
             // ==========================================
             const iniciarEscaner = (e) => {
                 e.preventDefault();
-                if (!nombreAsesor || !nombre || !apellido || !dni) {
-                    alert("Por favor completa todos los datos solicitados.");
+                if (!nombre || !apellido || !dni) {
+                    alert("Por favor completa los datos del cliente.");
                     return;
                 }
                 if (pages.length === 0) addPage(1);
@@ -162,41 +271,16 @@
                 setPreview(null);
                 setStep(3); 
 
-                if (activeSlot && activeSlot.source === 'camera') {
+                if (activeSlot.source === 'camera') {
                     setIsGettingGps(true);
                     try {
                         const pos = await getGPS();
-                        const lat = pos.coords.latitude;
-                        const lng = pos.coords.longitude;
-                        
-                        // Array base con Coordenadas por si falla el internet
-                        let addrLines = [`Lat: ${lat.toFixed(6)} Lng: ${lng.toFixed(6)}`];
-
-                        // NUEVO: Consultar dirección física exacta (Reverse Geocoding OpenStreetMap)
-                        try {
-                            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
-                                headers: { 'Accept-Language': 'es-PE,es;q=0.9' }
-                            });
-                            const data = await res.json();
-                            if (data && data.display_name) {
-                                // Dividir la dirección larga en líneas cortas ordenadas
-                                const parts = data.display_name.split(',').map(p => p.trim());
-                                addrLines = [];
-                                if (parts[0]) addrLines.push(parts.slice(0, 2).join(', ')); // Calle y barrio
-                                if (parts.length > 2) addrLines.push(parts.slice(2, 4).join(', ')); // Distrito y Provincia
-                                if (parts.length > 4) addrLines.push(parts.slice(4, 6).join(', ')); // Departamento y País
-                            }
-                        } catch(errorDir) {
-                            console.log("No se pudo obtener el nombre de la calle, usando coordenadas.", errorDir);
-                        }
-
                         setCurrentGps({
-                            lat: lat,
-                            lng: lng,
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude,
                             alt: pos.coords.altitude || null,
                             acc: pos.coords.accuracy,
-                            time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }),
-                            addressLines: addrLines
+                            time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
                         });
                     } catch (err) {
                         setCurrentGps({
@@ -223,12 +307,14 @@
                             let targetWidth = img.width;
                             let targetHeight = img.height;
                             const MAX_DIM = 2500;
+                            
                             if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
                                 const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
                                 targetWidth *= ratio;
                                 targetHeight *= ratio;
                             }
 
+                            // INVERTIR DIMENSIONES REALES SI ESTÁ ROTADO 90° o 270° (Solución Orientación)
                             if (angle % 180 !== 0) {
                                 canvas.width = targetHeight;
                                 canvas.height = targetWidth;
@@ -237,11 +323,21 @@
                                 canvas.height = targetHeight;
                             }
 
+                            // FONDO BLANCO SÓLIDO (Solución Fotos Negras Galería)
+                            ctx.fillStyle = '#ffffff';
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                            // Aplicar rotación y centrado
                             ctx.translate(canvas.width/2, canvas.height/2);
                             ctx.rotate((angle * Math.PI) / 180);
+                            
+                            // Dibujar la imagen
                             ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
+                            
+                            // Resetear matriz
                             ctx.setTransform(1, 0, 0, 1, 0, 0);
 
+                            // Sello de agua
                             if (source === 'camera' && gps) {
                                 const fontSize = Math.max(24, canvas.width * 0.025);
                                 ctx.font = `bold ${fontSize}px Arial`;
@@ -251,28 +347,21 @@
                                 const margin = fontSize;
                                 let startY = canvas.height - margin;
                                 
-                                // NUEVA ESTRUCTURA DEL SELLO DE AGUA
                                 const lines = [
-                                    `CREDIBAN PERÚ - Asesor: ${nombreAsesor}`,
+                                    `CREDIBAN PERÚ - Trabajo de Campo`,
                                     gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`,
                                 ];
                                 
                                 if (!gps.error) {
-                                    // Añadir las líneas de la dirección normal
-                                    if (gps.addressLines && gps.addressLines.length > 0) {
-                                        gps.addressLines.forEach(l => {
-                                            if(l) lines.push(l);
-                                        });
-                                    }
+                                    lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
                                     if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
                                 }
 
-                                // Dibujar las líneas de abajo hacia arriba
                                 lines.reverse().forEach(line => {
                                     ctx.strokeStyle = 'rgba(0,0,0,0.8)';
                                     ctx.lineWidth = fontSize * 0.2;
                                     ctx.strokeText(line, canvas.width - margin, startY);
-                                    ctx.fillStyle = '#facc15'; // Color amarillo de CREDIBAN
+                                    ctx.fillStyle = '#facc15'; 
                                     ctx.fillText(line, canvas.width - margin, startY);
                                     startY -= (fontSize * 1.2);
                                 });
@@ -321,7 +410,7 @@
                 setPages(newPages);
             };
 
-            const generarYEnviarPDF = async () => {
+            const generarPDF = async (actionType) => {
                 const hasPhotos = pages.some(p => p.images.some(img => img !== null));
                 if (!hasPhotos) {
                     alert("El documento está vacío. Añade fotos primero.");
@@ -391,20 +480,50 @@
                     const hoy = new Date();
                     const fileName = `${String(hoy.getDate()).padStart(2, '0')}-${String(hoy.getMonth() + 1).padStart(2, '0')}_${nombre.trim().replace(/\s+/g, '')}_${apellido.trim().replace(/\s+/g, '')}-${dni.trim()}.pdf`;
                     
-                    const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
-                    const txtMsg = `Estimado cliente, adjunto su expediente digitalizado.\nTitular: ${nombre} ${apellido}\nDNI: ${dni}`;
+                    // GUARDAR EN BASE DE DATOS LOCAL
+                    const idRegistro = Date.now().toString();
+                    const record = {
+                        id: idRegistro,
+                        timestamp: Date.now(),
+                        nombre: `${nombre} ${apellido}`,
+                        dni: dni,
+                        fecha: new Date().toLocaleString('es-PE'),
+                        pdfBlob: pdfBlob,
+                        fileName: fileName
+                    };
+                    await saveExpediente(record);
 
-                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                        await navigator.share({ files: [file], title: `Expediente CREDIBAN`, text: txtMsg });
-                    } else {
+                    // ACCIONES FINALES
+                    if (actionType === 'download') {
                         const url = URL.createObjectURL(pdfBlob);
                         const a = document.createElement('a');
                         a.href = url;
                         a.download = fileName;
                         a.click();
-                        const msg = encodeURIComponent(`${txtMsg}\n(Favor de adjuntar el PDF descargado manualmente).`);
-                        window.open(`https://wa.me/?text=${msg}`, '_blank');
+                        alert("✅ PDF Guardado en tus archivos.");
+                    } else if (actionType === 'whatsapp') {
+                        const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+                        const txtMsg = `Estimado cliente, adjunto su expediente digitalizado.\nTitular: ${nombre} ${apellido}\nDNI: ${dni}`;
+
+                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                            await navigator.share({ files: [file], title: `Expediente CREDIBAN`, text: txtMsg });
+                        } else {
+                            const url = URL.createObjectURL(pdfBlob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = fileName;
+                            a.click();
+                            const msg = encodeURIComponent(`${txtMsg}\n(Favor de adjuntar el PDF descargado manualmente).`);
+                            window.open(`https://wa.me/?text=${msg}`, '_blank');
+                        }
                     }
+                    
+                    // Limpiar y enviar a historial
+                    setPages([]);
+                    setNombre(''); setApellido(''); setDni('');
+                    setStep(1);
+                    setCurrentTab('history');
+
                 } catch (error) {
                     console.error("Error:", error);
                     alert("Error al generar PDF.");
@@ -414,13 +533,13 @@
             };
 
             // ==========================================
-            // COMPONENTE HEADER CON INDICADOR GPS
+            // COMPONENTE HEADER CON PESTAÑAS
             // ==========================================
             const Header = () => (
-                <header className="bg-white shadow-sm border-b border-slate-200 py-3 px-4 w-full z-50">
-                    <div className="max-w-7xl mx-auto flex items-center justify-between">
+                <header className="bg-white shadow-sm border-b border-slate-200 py-3 px-4 w-full z-50 sticky top-0">
+                    <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
-                            <div className="w-10 md:w-12 h-auto flex-shrink-0 logo-hover">
+                            <div className="w-10 h-auto flex-shrink-0 logo-hover">
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240" className="w-full h-full">
                                     <g fill="#59B447">
                                         <rect x="90" y="8" width="24" height="13" rx="6.5" className="animate-pulse"/>
@@ -434,69 +553,117 @@
                                 </svg>
                             </div>
                             <div className="flex flex-col justify-center text-left">
-                                <span className="text-[#59B447] font-bold text-xl md:text-3xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
-                                <span className="text-[#59B447] font-bold text-[8px] md:text-[11px] leading-tight tracking-wide mt-1 uppercase" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>empieza a construir tus sueños</span>
+                                <span className="text-[#59B447] font-bold text-2xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
+                                <span className="text-[#59B447] font-bold text-[9px] leading-tight tracking-wide mt-1 uppercase" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>empieza a construir tus sueños</span>
                             </div>
                         </div>
-
-                        <div className={`flex items-center gap-1.5 px-3 py-1.5 md:px-4 md:py-2 rounded-full text-[10px] md:text-xs font-bold border transition-colors shadow-sm ${
-                            gpsGlobalStatus === 'listo' ? 'bg-green-50 text-green-700 border-green-200' :
-                            gpsGlobalStatus === 'buscando' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
-                            'bg-red-50 text-red-600 border-red-200'
-                        }`}>
-                            {gpsGlobalStatus === 'listo' && <><i className="fa-solid fa-location-crosshairs text-sm md:text-base"></i><span className="hidden sm:inline">GPS Activo</span><span className="sm:hidden">Activo</span></>}
-                            {gpsGlobalStatus === 'buscando' && <><i className="fa-solid fa-satellite-dish animate-pulse text-sm md:text-base"></i><span className="hidden sm:inline">Buscando...</span><span className="sm:hidden">Buscando</span></>}
-                            {gpsGlobalStatus === 'denegado' && <><i className="fa-solid fa-triangle-exclamation text-sm md:text-base"></i><span className="hidden sm:inline">Bloqueado</span><span className="sm:hidden">Bloqueado</span></>}
+                        
+                        <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner w-full md:w-auto">
+                            <button onClick={() => setCurrentTab('scanner')} className={`flex-1 md:w-32 py-2 text-xs font-bold uppercase rounded-lg transition-all ${currentTab === 'scanner' ? 'bg-white text-[#59B447] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                <i className="fa-solid fa-camera mr-1"></i> Escanear
+                            </button>
+                            <button onClick={() => setCurrentTab('history')} className={`flex-1 md:w-40 py-2 text-xs font-bold uppercase rounded-lg transition-all ${currentTab === 'history' ? 'bg-white text-[#59B447] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                <i className="fa-solid fa-folder-open mr-1"></i> Mis Expedientes
+                            </button>
                         </div>
                     </div>
                 </header>
             );
 
             // ==========================================
-            // PANTALLA 1: CONFIGURACIÓN
+            // VISTA PESTAÑA: MIS EXPEDIENTES
+            // ==========================================
+            if (currentTab === 'history') {
+                return (
+                    <div className="min-h-screen bg-slate-50 flex flex-col">
+                        <Header />
+                        <input type="file" accept=".csv" className="hidden" ref={csvInputRef} onChange={importCSV} />
+                        
+                        <main className="flex-1 w-full max-w-4xl mx-auto p-4 md:p-8">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-hard-drive text-[#59B447]"></i> Registro Local</h2>
+                                <div className="flex gap-2">
+                                    <button onClick={exportCSV} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm active:scale-95 transition-all">
+                                        <i className="fa-solid fa-download text-blue-600"></i> Exportar CSV
+                                    </button>
+                                    <button onClick={() => csvInputRef.current.click()} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm active:scale-95 transition-all">
+                                        <i className="fa-solid fa-upload text-orange-500"></i> Subir CSV
+                                    </button>
+                                </div>
+                            </div>
+
+                            {historyData.length === 0 ? (
+                                <div className="glass-card rounded-3xl p-10 text-center border-dashed border-2 border-slate-300">
+                                    <i className="fa-regular fa-folder-open text-5xl text-slate-300 mb-4 block"></i>
+                                    <p className="text-slate-500 font-medium text-lg">Aún no has generado ningún expediente.</p>
+                                </div>
+                            ) : (
+                                <div className="grid gap-4">
+                                    {historyData.map(record => (
+                                        <div key={record.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 hover:shadow-md transition-shadow">
+                                            <div className="flex items-center gap-4 w-full sm:w-auto">
+                                                <div className="w-12 h-12 bg-red-50 text-red-500 rounded-xl flex items-center justify-center text-2xl flex-shrink-0">
+                                                    <i className="fa-regular fa-file-pdf"></i>
+                                                </div>
+                                                <div>
+                                                    <p className="font-bold text-slate-800 text-base">{record.nombre}</p>
+                                                    <p className="text-xs text-slate-500">DNI: <span className="font-semibold text-slate-600">{record.dni}</span></p>
+                                                    <p className="text-[10px] text-slate-400 mt-1"><i className="fa-regular fa-clock"></i> {record.fecha}</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2 w-full sm:w-auto">
+                                                <button onClick={() => handleOpenPDF(record.pdfBlob, record.fileName)} className="flex-1 sm:flex-none bg-blue-50 text-blue-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors">
+                                                    <i className="fa-solid fa-folder-open"></i> Abrir
+                                                </button>
+                                                <button onClick={() => handleDeleteRecord(record.id)} className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors">
+                                                    <i className="fa-solid fa-trash-can"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </main>
+                    </div>
+                );
+            }
+
+            // ==========================================
+            // PANTALLA 1: CONFIGURACIÓN 
             // ==========================================
             if (step === 1) {
                 return (
                     <div className="min-h-screen bg-slate-50 flex flex-col">
                         <Header />
-                        <main className="flex-1 w-full max-w-7xl mx-auto p-6 md:p-12 flex items-center justify-center">
-                            <div className="glass-card p-8 md:p-12 rounded-3xl w-full max-w-3xl shadow-xl border border-slate-200">
-                                <div className="w-16 h-16 bg-green-50 text-[#59B447] rounded-full flex items-center justify-center text-3xl mb-6 shadow-inner mx-auto md:mx-0">
-                                    <i className="fa-solid fa-folder-open"></i>
-                                </div>
-                                <h2 className="text-2xl md:text-3xl font-bold text-slate-800 mb-8 text-center md:text-left">Apertura de Expediente</h2>
+                        <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-12 flex items-center justify-center">
+                            <div className="glass-card p-6 md:p-10 rounded-3xl w-full max-w-3xl shadow-xl border border-slate-200">
+                                <h2 className="text-xl md:text-2xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-4">Apertura de Expediente</h2>
                                 
                                 <form onSubmit={iniciarEscaner} className="space-y-6">
-                                    {/* NUEVO CAMPO: Nombre del Asesor */}
-                                    <div>
-                                        <label className="block text-sm font-bold text-[#59B447] uppercase mb-2"><i className="fa-solid fa-user-tie mr-1"></i> Nombre del Asesor</label>
-                                        <input type="text" required value={nombreAsesor} onChange={e => setNombreAsesor(e.target.value.toUpperCase())} className="w-full p-4 border border-green-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-bold text-slate-700 bg-green-50/30" placeholder="Ej: CARLOS RUIZ" />
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 border-t border-slate-100">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                         <div>
-                                            <label className="block text-sm font-bold text-slate-500 uppercase mb-2">Nombre del Cliente</label>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre del Cliente</label>
                                             <input type="text" required value={nombre} onChange={e => setNombre(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: JUAN" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-bold text-slate-500 uppercase mb-2">Apellido del Cliente</label>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Apellido del Cliente</label>
                                             <input type="text" required value={apellido} onChange={e => setApellido(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: PEREZ" />
                                         </div>
                                     </div>
                                     
                                     <div>
-                                        <label className="block text-sm font-bold text-slate-500 uppercase mb-2">Documento de Identidad (DNI)</label>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">DNI del Cliente</label>
                                         <div className="relative">
                                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
-                                                <i className="fa-regular fa-id-card text-xl"></i>
+                                                <i className="fa-regular fa-id-card"></i>
                                             </div>
-                                            <input type="tel" maxLength="8" required value={dni} onChange={e => setDni(e.target.value.replace(/\D/g, ''))} className="w-full pl-12 p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-bold tracking-widest text-xl text-slate-700 bg-white" placeholder="12345678" />
+                                            <input type="tel" maxLength="8" required value={dni} onChange={e => setDni(e.target.value.replace(/\D/g, ''))} className="w-full pl-12 p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-bold tracking-widest text-lg text-slate-700 bg-white" placeholder="12345678" />
                                         </div>
                                     </div>
 
-                                    <div className="pt-4">
-                                        <button type="submit" className="w-full bg-gradient-to-r from-[#59B447] to-[#4a973a] hover:from-[#4a973a] hover:to-[#3d7a2f] text-white font-bold py-5 rounded-2xl shadow-lg shadow-green-500/30 transition-all active:scale-95 flex items-center justify-center gap-3 text-xl">
-                                            Empezar a Escanear <i className="fa-solid fa-arrow-right"></i>
+                                    <div className="pt-2">
+                                        <button type="submit" className="w-full bg-gradient-to-r from-[#59B447] to-[#4a973a] hover:from-[#4a973a] hover:to-[#3d7a2f] text-white font-bold py-4 rounded-2xl shadow-lg shadow-green-500/30 transition-all active:scale-95 flex items-center justify-center gap-2 text-lg">
+                                            Iniciar Escaneo <i className="fa-solid fa-arrow-right"></i>
                                         </button>
                                     </div>
                                 </form>
@@ -507,41 +674,41 @@
             }
 
             // ==========================================
-            // PANTALLA 3: PREVISUALIZACIÓN Y CÁMARA
+            // PANTALLA 3: PREVISUALIZACIÓN Y AJUSTES
             // ==========================================
             if (step === 3) {
                 return (
                     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-between p-4 md:p-8 relative">
-                        <div className="w-full text-center py-6 z-10 max-w-3xl">
-                            <h2 className="text-white text-2xl font-bold">Ajuste de Imagen</h2>
-                            <p className="text-green-400 text-base font-medium mt-1">Hoja {activeSlot ? activeSlot.pageIndex + 1 : 0} (Posición {activeSlot ? activeSlot.photoIndex + 1 : 0})</p>
+                        <div className="w-full text-center py-4 z-10 max-w-3xl">
+                            <h2 className="text-white text-xl font-bold">Ajuste de Imagen</h2>
+                            <p className="text-green-400 text-sm font-medium mt-1">Hoja {activeSlot?.pageIndex + 1} (Posición {activeSlot?.photoIndex + 1})</p>
                         </div>
                         
-                        <div className="flex-1 w-full max-w-4xl bg-black/50 rounded-3xl overflow-hidden flex items-center justify-center my-4 border border-slate-700 relative shadow-2xl p-4">
+                        <div className="flex-1 w-full max-w-4xl bg-black/50 rounded-3xl overflow-hidden flex items-center justify-center my-2 border border-slate-700 relative shadow-2xl p-2">
                             {isGettingGps ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
-                                    <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center text-4xl mb-4"><i className="fa-solid fa-satellite-dish text-[#59B447]"></i></div>
-                                    <span className="font-semibold text-lg">Traduciendo GPS a Dirección Física...</span>
+                                    <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-satellite-dish text-[#59B447]"></i></div>
+                                    <span className="font-semibold">Obteniendo GPS...</span>
                                 </div>
                             ) : isProcessingImage ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
-                                    <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center text-4xl mb-4"><i className="fa-solid fa-spinner fa-spin text-[#59B447]"></i></div>
-                                    <span className="font-semibold text-lg">Procesando imagen y sello...</span>
+                                    <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-spinner fa-spin text-[#59B447]"></i></div>
+                                    <span className="font-semibold">Procesando...</span>
                                 </div>
                             ) : preview ? (
                                 <img src={preview} alt="Previsualización" className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg border border-slate-700" />
                             ) : null}
                         </div>
 
-                        <div className="w-full max-w-3xl grid grid-cols-3 gap-4 pb-8 z-10 px-2 mt-4">
-                            <button onClick={descartarHoja} className="bg-slate-800 hover:bg-slate-700 text-white text-sm md:text-base font-bold py-5 rounded-2xl border border-slate-700 transition-all flex flex-col items-center justify-center active:scale-95 shadow-lg">
-                                <i className="fa-solid fa-xmark text-2xl mb-2 text-red-400"></i> Rechazar
+                        <div className="w-full max-w-3xl grid grid-cols-3 gap-3 pb-6 z-10 mt-4">
+                            <button onClick={descartarHoja} className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-4 rounded-2xl border border-slate-700 transition-all flex flex-col items-center justify-center active:scale-95 shadow-lg">
+                                <i className="fa-solid fa-xmark text-xl mb-1 text-red-400"></i> Rechazar
                             </button>
-                            <button onClick={() => setRotation(r => (r + 90) % 360)} disabled={!preview || isProcessingImage} className="bg-blue-600 hover:bg-blue-500 text-white text-sm md:text-base font-bold py-5 rounded-2xl transition-all flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-lg shadow-blue-500/20">
-                                <i className="fa-solid fa-rotate-right text-2xl mb-2"></i> Girar
+                            <button onClick={() => setRotation(r => (r + 90) % 360)} disabled={!preview || isProcessingImage} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-4 rounded-2xl transition-all flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-lg shadow-blue-500/20">
+                                <i className="fa-solid fa-rotate-right text-xl mb-1"></i> Girar
                             </button>
-                            <button onClick={aceptarHoja} disabled={!preview || isProcessingImage} className="bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white text-sm md:text-base font-bold py-5 rounded-2xl transition-all shadow-lg shadow-green-500/30 flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95">
-                                <i className="fa-solid fa-check text-2xl mb-2"></i> Aprobar
+                            <button onClick={aceptarHoja} disabled={!preview || isProcessingImage} className="bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white text-xs font-bold py-4 rounded-2xl transition-all shadow-lg shadow-green-500/30 flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95">
+                                <i className="fa-solid fa-check text-xl mb-1"></i> Aprobar
                             </button>
                         </div>
                     </div>
@@ -549,62 +716,58 @@
             }
 
             // ==========================================
-            // PANTALLA 2: CONSTRUCTOR DEL EXPEDIENTE
+            // PANTALLA 2: CONSTRUCTOR (MÓVIL Y PC)
             // ==========================================
             return (
-                <div className="min-h-screen bg-slate-50 flex flex-col relative pb-24 md:pb-0">
+                <div className="min-h-screen bg-slate-50 flex flex-col relative pb-32 md:pb-0">
                     <input type="file" accept="image/*" capture="environment" className="hidden" ref={cameraInputRef} onChange={handleFileSelected} />
                     <input type="file" accept="image/*" className="hidden" ref={galleryInputRef} onChange={handleFileSelected} />
 
                     <Header />
 
                     <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-8">
-                        <div className="flex flex-col md:flex-row gap-8 items-start">
+                        <div className="flex flex-col md:flex-row gap-6 items-start">
                             
-                            {/* COLUMNA IZQUIERDA: Hojas del PDF */}
-                            <div className="w-full md:w-2/3 flex flex-col gap-6">
-                                <h3 className="text-xl font-bold text-slate-800 mb-2 border-b border-slate-200 pb-2">Contenido del Expediente</h3>
+                            {/* COLUMNA IZQUIERDA: Hojas */}
+                            <div className="w-full md:w-2/3 flex flex-col gap-5">
+                                <h3 className="text-lg font-bold text-slate-800 mb-1 border-b border-slate-200 pb-2">Contenido del Expediente</h3>
                                 
                                 {pages.length === 0 ? (
-                                    <div className="glass-card rounded-3xl p-10 text-center border-dashed border-2 border-slate-300">
-                                        <i className="fa-regular fa-folder-open text-5xl text-slate-300 mb-4 block"></i>
-                                        <p className="text-slate-500 font-medium text-lg">El expediente está vacío.</p>
-                                        <p className="text-slate-400 text-sm">Añade hojas utilizando el panel derecho.</p>
+                                    <div className="glass-card rounded-3xl p-8 text-center border-dashed border-2 border-slate-300">
+                                        <i className="fa-regular fa-images text-4xl text-slate-300 mb-3 block"></i>
+                                        <p className="text-slate-500 font-medium text-sm">Añade hojas utilizando el panel.</p>
                                     </div>
                                 ) : (
                                     pages.map((page, pIdx) => (
-                                        <div key={page.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden relative group transition-all hover:shadow-md">
-                                            <div className="bg-slate-50/80 px-5 py-4 border-b border-slate-100 flex justify-between items-center backdrop-blur-sm">
-                                                <span className="font-bold text-slate-700 text-base flex items-center gap-2">
+                                        <div key={page.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden relative">
+                                            <div className="bg-slate-50 px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+                                                <span className="font-bold text-slate-700 text-sm flex items-center gap-2">
                                                     <i className="fa-regular fa-file-pdf text-[#59B447]"></i> Hoja {pIdx + 1} 
-                                                    <span className="bg-white px-2 py-0.5 rounded-md text-xs text-slate-500 border border-slate-200 shadow-sm">{page.layout} fotos</span>
                                                 </span>
-                                                <button onClick={() => removePage(pIdx)} className="text-red-500 hover:text-white hover:bg-red-500 hover:border-red-500 text-xs font-bold bg-white px-3 py-1.5 rounded-lg border border-red-200 shadow-sm transition-all">
-                                                    <i className="fa-solid fa-trash-can mr-1"></i> Borrar
+                                                <button onClick={() => removePage(pIdx)} className="text-red-500 hover:bg-red-50 text-[10px] font-bold px-2 py-1.5 rounded border border-red-100 transition-all">
+                                                    <i className="fa-solid fa-trash-can mr-1"></i> Borrar Hoja
                                                 </button>
                                             </div>
                                             
-                                            <div className={`p-5 grid gap-4 ${page.layout === 1 ? 'grid-cols-1 md:w-2/3 mx-auto aspect-[3/4]' : page.layout === 2 ? 'grid-cols-1 md:w-3/4 mx-auto' : 'grid-cols-2'}`}>
+                                            <div className={`p-4 grid gap-3 ${page.layout === 1 ? 'grid-cols-1 md:w-2/3 mx-auto aspect-[3/4]' : page.layout === 2 ? 'grid-cols-1 md:w-3/4 mx-auto' : 'grid-cols-2'}`}>
                                                 {page.images.map((imgUrl, iIdx) => (
-                                                    <div key={iIdx} className={`relative rounded-2xl border-2 overflow-hidden bg-slate-50 flex flex-col items-center justify-center transition-all ${page.layout !== 1 ? 'aspect-[4/3]' : 'h-full'} ${imgUrl ? 'border-[#59B447] shadow-sm' : 'border-dashed border-slate-300 hover:border-blue-400'}`}>
+                                                    <div key={iIdx} className={`relative rounded-xl border-2 overflow-hidden bg-slate-50 flex flex-col items-center justify-center transition-all ${page.layout !== 1 ? 'aspect-[4/3]' : 'h-full'} ${imgUrl ? 'border-[#59B447] shadow-sm' : 'border-dashed border-slate-300'}`}>
                                                         {imgUrl ? (
                                                             <>
                                                                 <img src={imgUrl} className="w-full h-full object-cover" alt={`H${pIdx+1}-F${iIdx+1}`} />
-                                                                <button onClick={() => removePhoto(pIdx, iIdx)} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg active:scale-95 z-10 text-sm transition-transform hover:scale-110">
+                                                                <button onClick={() => removePhoto(pIdx, iIdx)} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg active:scale-95 z-10 text-xs">
                                                                     <i className="fa-solid fa-xmark"></i>
                                                                 </button>
                                                             </>
                                                         ) : (
-                                                            <div className="flex flex-col w-full h-full p-4 gap-4 justify-center items-center">
-                                                                <span className="text-xs text-slate-400 font-bold uppercase tracking-wider bg-white px-3 py-1 rounded-full shadow-sm">Foto {iIdx + 1}</span>
-                                                                <div className="flex flex-col sm:flex-row w-full gap-3 px-2">
-                                                                    <button onClick={() => openCamera(pIdx, iIdx)} className="flex-1 bg-white text-blue-600 hover:bg-blue-50 border border-blue-100 rounded-xl py-3 flex flex-col items-center justify-center transition-all shadow-sm active:scale-95">
-                                                                        <i className="fa-solid fa-camera text-2xl mb-1"></i>
-                                                                        <span className="text-[11px] font-bold uppercase">Cámara</span>
+                                                            <div className="flex flex-col w-full h-full p-2 justify-center items-center">
+                                                                <span className="text-[10px] text-slate-400 font-bold uppercase mb-2">Espacio {iIdx + 1}</span>
+                                                                <div className="flex w-full gap-2 px-1">
+                                                                    <button onClick={() => openCamera(pIdx, iIdx)} className="flex-1 bg-white text-blue-600 border border-blue-100 rounded-lg py-3 flex flex-col items-center justify-center shadow-sm active:scale-95">
+                                                                        <i className="fa-solid fa-camera text-lg mb-1"></i><span className="text-[9px] font-bold">CÁMARA</span>
                                                                     </button>
-                                                                    <button onClick={() => openGallery(pIdx, iIdx)} className="flex-1 bg-white text-orange-500 hover:bg-orange-50 border border-orange-100 rounded-xl py-3 flex flex-col items-center justify-center transition-all shadow-sm active:scale-95">
-                                                                        <i className="fa-solid fa-image text-2xl mb-1"></i>
-                                                                        <span className="text-[11px] font-bold uppercase">Galería</span>
+                                                                    <button onClick={() => openGallery(pIdx, iIdx)} className="flex-1 bg-white text-orange-500 border border-orange-100 rounded-lg py-3 flex flex-col items-center justify-center shadow-sm active:scale-95">
+                                                                        <i className="fa-solid fa-image text-lg mb-1"></i><span className="text-[9px] font-bold">GALERÍA</span>
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -617,73 +780,57 @@
                                 )}
                             </div>
 
-                            {/* COLUMNA DERECHA: Resumen y Controles */}
-                            <div className="w-full md:w-1/3 flex flex-col gap-6 md:sticky md:top-24">
-                                
-                                <div className="glass-card p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            {/* COLUMNA DERECHA: Controles */}
+                            <div className="w-full md:w-1/3 flex flex-col gap-4 md:sticky md:top-24">
+                                <div className="glass-card p-5 rounded-3xl border border-slate-200 shadow-sm">
                                     <div className="flex justify-between items-start mb-2">
-                                        <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center text-[#59B447] mb-3">
-                                            <i className="fa-regular fa-address-card text-xl"></i>
+                                        <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center text-[#59B447] mb-2">
+                                            <i className="fa-regular fa-address-card"></i>
                                         </div>
-                                        <button onClick={() => setStep(1)} className="bg-white text-slate-600 border border-slate-200 p-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 shadow-sm transition-colors active:scale-95">
+                                        <button onClick={() => setStep(1)} className="bg-white text-slate-600 border border-slate-200 p-2 rounded-lg text-xs font-bold shadow-sm active:scale-95">
                                             <i className="fa-solid fa-pen"></i> Editar
                                         </button>
                                     </div>
-                                    <p className="text-xs font-bold text-[#59B447] uppercase tracking-wider mb-1">Asesor: {nombreAsesor}</p>
-                                    <p className="font-bold text-slate-800 text-xl leading-tight mb-1">{nombre} {apellido}</p>
-                                    <p className="text-sm text-slate-500 font-medium">DNI: <span className="text-slate-700">{dni}</span></p>
-                                    <p className="text-sm text-slate-500 font-medium mt-4 pt-4 border-t border-slate-100">
-                                        Total Hojas: <span className="font-bold text-slate-700">{pages.length}</span>
-                                    </p>
+                                    <p className="font-bold text-slate-800 text-lg leading-tight mb-1">{nombre} {apellido}</p>
+                                    <p className="text-xs text-slate-500 font-medium">DNI: <span className="text-slate-700">{dni}</span></p>
                                 </div>
 
-                                <div className="glass-card rounded-3xl p-6 shadow-sm border border-slate-200">
-                                    <label className="block text-sm font-bold text-slate-700 mb-4 text-center">Añadir Nueva Hoja</label>
-                                    <div className="grid grid-cols-3 gap-3">
-                                        <button onClick={() => addPage(1)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] hover:border-[#59B447] hover:shadow-md font-bold py-4 rounded-2xl flex flex-col items-center justify-center shadow-sm transition-all active:scale-95">
-                                            <i className="fa-regular fa-file text-2xl mb-2"></i><span className="text-[11px] uppercase">1 Foto</span>
+                                <div className="glass-card rounded-3xl p-5 shadow-sm border border-slate-200">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-3 text-center">Añadir Hoja</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button onClick={() => addPage(1)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
+                                            <i className="fa-regular fa-file text-xl mb-1"></i><span className="text-[9px] uppercase">1 Foto</span>
                                         </button>
-                                        <button onClick={() => addPage(2)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] hover:border-[#59B447] hover:shadow-md font-bold py-4 rounded-2xl flex flex-col items-center justify-center shadow-sm transition-all active:scale-95">
-                                            <i className="fa-solid fa-grip-lines text-2xl mb-2"></i><span className="text-[11px] uppercase">2 Fotos</span>
+                                        <button onClick={() => addPage(2)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
+                                            <i className="fa-solid fa-grip-lines text-xl mb-1"></i><span className="text-[9px] uppercase">2 Fotos</span>
                                         </button>
-                                        <button onClick={() => addPage(4)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] hover:border-[#59B447] hover:shadow-md font-bold py-4 rounded-2xl flex flex-col items-center justify-center shadow-sm transition-all active:scale-95">
-                                            <i className="fa-solid fa-border-all text-2xl mb-2"></i><span className="text-[11px] uppercase">4 Fotos</span>
+                                        <button onClick={() => addPage(4)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
+                                            <i className="fa-solid fa-border-all text-xl mb-1"></i><span className="text-[9px] uppercase">4 Fotos</span>
                                         </button>
                                     </div>
+                                    <p className="text-[10px] text-slate-400 mt-3 text-center">Tip: Para DNI horizontal, usa el formato de 2 Fotos.</p>
                                 </div>
 
-                                {/* Botón Generar (Solo Escritorio) */}
-                                <div className="hidden md:block">
-                                    <button 
-                                        onClick={generarYEnviarPDF}
-                                        disabled={pages.length === 0 || isGenerating}
-                                        className={`w-full font-bold py-5 rounded-2xl shadow-lg flex items-center justify-center gap-3 text-lg transition-all
-                                            ${pages.length > 0 && pages.some(p => p.images.some(img => img !== null)) ? 'bg-gradient-to-r from-[#25D366] to-[#128C7E] text-white shadow-green-500/30 hover:scale-[1.02] active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'}`}
-                                    >
-                                        {isGenerating ? (
-                                            <><i className="fa-solid fa-spinner fa-spin text-xl"></i> Procesando...</>
-                                        ) : (
-                                            <><i className="fa-brands fa-whatsapp text-2xl"></i> Enviar Expediente</>
-                                        )}
+                                {/* Botones Acción (Escritorio) */}
+                                <div className="hidden md:flex flex-col gap-3 mt-2">
+                                    <button onClick={() => generarPDF('download')} disabled={pages.length === 0 || isGenerating} className={`w-full font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm transition-all ${pages.length > 0 ? 'bg-white border-2 border-[#59B447] text-[#59B447] hover:bg-green-50' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}>
+                                        <i className="fa-solid fa-download"></i> Guardar PDF
+                                    </button>
+                                    <button onClick={() => generarPDF('whatsapp')} disabled={pages.length === 0 || isGenerating} className={`w-full font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-sm transition-all ${pages.length > 0 ? 'bg-gradient-to-r from-[#25D366] to-[#128C7E] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'}`}>
+                                        {isGenerating ? <><i className="fa-solid fa-spinner fa-spin"></i> Generando...</> : <><i className="fa-brands fa-whatsapp text-lg"></i> Enviar WhatsApp</>}
                                     </button>
                                 </div>
                             </div>
                         </div>
                     </main>
 
-                    {/* Botón Generar Flotante (Solo Móvil) */}
-                    <div className="md:hidden fixed bottom-0 left-0 w-full bg-white/90 backdrop-blur-md border-t border-slate-200 p-4 pb-6 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-40">
-                        <button 
-                            onClick={generarYEnviarPDF}
-                            disabled={pages.length === 0 || isGenerating}
-                            className={`w-full font-bold py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 text-lg transition-all
-                                ${pages.length > 0 && pages.some(p => p.images.some(img => img !== null)) ? 'bg-gradient-to-r from-[#25D366] to-[#128C7E] text-white shadow-green-500/30 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'}`}
-                        >
-                            {isGenerating ? (
-                                <><i className="fa-solid fa-spinner fa-spin"></i> Procesando...</>
-                            ) : (
-                                <><i className="fa-brands fa-whatsapp text-xl"></i> Enviar Expediente</>
-                            )}
+                    {/* Botones Flotantes (Solo Móvil) */}
+                    <div className="md:hidden fixed bottom-0 left-0 w-full bg-white/95 backdrop-blur-md border-t border-slate-200 p-3 pb-5 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-40 flex gap-2">
+                        <button onClick={() => generarPDF('download')} disabled={pages.length === 0 || isGenerating} className={`flex-1 font-bold py-3 rounded-xl shadow-sm flex items-center justify-center gap-1 text-xs transition-all ${pages.length > 0 ? 'bg-white border border-[#59B447] text-[#59B447]' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}>
+                            <i className="fa-solid fa-download"></i> PDF
+                        </button>
+                        <button onClick={() => generarPDF('whatsapp')} disabled={pages.length === 0 || isGenerating} className={`flex-[2] font-bold py-3 rounded-xl shadow-md flex items-center justify-center gap-2 text-sm transition-all ${pages.length > 0 ? 'bg-gradient-to-r from-[#25D366] to-[#128C7E] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'}`}>
+                            {isGenerating ? <><i className="fa-solid fa-spinner fa-spin"></i> Generando...</> : <><i className="fa-brands fa-whatsapp text-lg"></i> Enviar</>}
                         </button>
                     </div>
                 </div>
