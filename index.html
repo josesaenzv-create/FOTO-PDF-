@@ -34,8 +34,6 @@
             100% { transform: translateY(0px); }
         }
         .logo-hover:hover svg { animation: float 2s ease-in-out infinite; }
-        
-        /* Ocultar barra de scroll para un aspecto más nativo */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
@@ -84,7 +82,6 @@
                 const store = tx.objectStore(STORE_NAME);
                 const request = store.getAll();
                 request.onsuccess = () => {
-                    // Ordenar del más reciente al más antiguo
                     const result = request.result.sort((a, b) => b.timestamp - a.timestamp);
                     resolve(result);
                 };
@@ -104,11 +101,11 @@
         };
 
         function EscanerApp() {
-            // NAVEGACIÓN
-            const [currentTab, setCurrentTab] = React.useState('scanner'); // 'scanner' | 'history'
+            const [currentTab, setCurrentTab] = React.useState('scanner'); 
             const [historyData, setHistoryData] = React.useState([]);
 
-            // ESTADOS DEL ESCÁNER
+            // ESTADOS DEL FORMULARIO Y USUARIO
+            const [asesor, setAsesor] = React.useState(() => localStorage.getItem('crediban_asesor') || '');
             const [nombre, setNombre] = React.useState('');
             const [apellido, setApellido] = React.useState('');
             const [dni, setDni] = React.useState('');
@@ -126,12 +123,34 @@
             const [isProcessingImage, setIsProcessingImage] = React.useState(false);
             const [isGenerating, setIsGenerating] = React.useState(false);
             
+            // MONITOR GPS GLOBAL
+            const [gpsGlobalStatus, setGpsGlobalStatus] = React.useState('buscando');
+            
             const cameraInputRef = React.useRef(null);
             const galleryInputRef = React.useRef(null);
             const csvInputRef = React.useRef(null);
 
             // ==========================================
-            // LÓGICA DE HISTORIAL Y RESPALDO CSV
+            // MONITOR GPS EN SEGUNDO PLANO
+            // ==========================================
+            React.useEffect(() => {
+                let watchId;
+                if ("geolocation" in navigator) {
+                    watchId = navigator.geolocation.watchPosition(
+                        (position) => setGpsGlobalStatus('listo'),
+                        (error) => setGpsGlobalStatus('denegado'),
+                        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                    );
+                } else {
+                    setGpsGlobalStatus('denegado');
+                }
+                return () => {
+                    if (watchId) navigator.geolocation.clearWatch(watchId);
+                };
+            }, []);
+
+            // ==========================================
+            // HISTORIAL Y RESPALDO CSV
             // ==========================================
             const loadHistory = async () => {
                 try {
@@ -143,9 +162,7 @@
             };
 
             React.useEffect(() => {
-                if (currentTab === 'history') {
-                    loadHistory();
-                }
+                if (currentTab === 'history') loadHistory();
             }, [currentTab]);
 
             const handleDeleteRecord = async (id) => {
@@ -157,7 +174,7 @@
 
             const handleOpenPDF = (blob, fileName) => {
                 if (!blob) {
-                    alert("El archivo PDF no está disponible. Es posible que este registro se haya importado desde un CSV que solo contiene el texto, no los archivos.");
+                    alert("El archivo PDF no está disponible para visualización.");
                     return;
                 }
                 const url = URL.createObjectURL(blob);
@@ -168,14 +185,9 @@
             };
 
             const exportCSV = () => {
-                if (historyData.length === 0) {
-                    alert("No hay expedientes para respaldar.");
-                    return;
-                }
+                if (historyData.length === 0) return alert("No hay expedientes para respaldar.");
                 let csv = "ID,Nombre,DNI,Fecha\n";
-                historyData.forEach(r => {
-                    csv += `"${r.id}","${r.nombre}","${r.dni}","${r.fecha}"\n`;
-                });
+                historyData.forEach(r => { csv += `"${r.id}","${r.nombre}","${r.dni}","${r.fecha}"\n`; });
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -196,16 +208,11 @@
                         if (!lines[i].trim()) continue;
                         const match = lines[i].match(/"([^"]+)","([^"]+)","([^"]+)","([^"]+)"/);
                         if (match) {
-                            const record = {
-                                id: match[1],
-                                nombre: match[2],
-                                dni: match[3],
-                                fecha: match[4],
-                                timestamp: parseInt(match[1]) || Date.now(),
-                                pdfBlob: null,
+                            await saveExpediente({
+                                id: match[1], nombre: match[2], dni: match[3], fecha: match[4],
+                                timestamp: parseInt(match[1]) || Date.now(), pdfBlob: null,
                                 fileName: `Expediente_Recuperado_${match[3]}.pdf`
-                            };
-                            await saveExpediente(record);
+                            });
                             count++;
                         }
                     }
@@ -217,24 +224,23 @@
             };
 
             // ==========================================
-            // LÓGICA DE ESCÁNER
+            // LÓGICA DE ESCÁNER Y GEOLOCALIZACIÓN
             // ==========================================
             const iniciarEscaner = (e) => {
                 e.preventDefault();
-                if (!nombre || !apellido || !dni) {
-                    alert("Por favor completa los datos del cliente.");
+                if (!nombre || !apellido || !dni || !asesor) {
+                    alert("Por favor completa todos los campos requeridos.");
                     return;
                 }
+                localStorage.setItem('crediban_asesor', asesor);
                 if (pages.length === 0) addPage(1);
                 setStep(2);
             };
 
-            const addPage = (layout) => {
-                setPages([...pages, { id: Date.now(), layout: layout, images: Array(layout).fill(null) }]);
-            };
-
+            const addPage = (layout) => setPages([...pages, { id: Date.now(), layout: layout, images: Array(layout).fill(null) }]);
+            
             const removePage = (pageIndex) => {
-                if(confirm("¿Seguro que deseas eliminar esta hoja completa del documento?")){
+                if(confirm("¿Seguro que deseas eliminar esta hoja?")){
                     const newPages = [...pages];
                     newPages.splice(pageIndex, 1);
                     setPages(newPages);
@@ -251,18 +257,49 @@
                 if (galleryInputRef.current) galleryInputRef.current.click();
             };
 
-            const getGPS = () => {
+            // OPENSTREETMAP: Función para transformar coordenadas a Dirección
+            const getGPSData = async () => {
                 return new Promise((resolve, reject) => {
-                    if (!navigator.geolocation) return reject("Navegador sin GPS");
+                    if (!navigator.geolocation) return reject("Sin GPS");
                     navigator.geolocation.getCurrentPosition(
-                        pos => resolve(pos),
-                        err => reject(err),
-                        { enableHighAccuracy: true, timeout: 10000 }
+                        async (pos) => {
+                            const lat = pos.coords.latitude;
+                            const lng = pos.coords.longitude;
+                            let direccionStr = null;
+                            
+                            try {
+                                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+                                if(response.ok){
+                                    const data = await response.json();
+                                    if(data && data.address) {
+                                        const { road, pedestrian, suburb, house_number, city, town, village, state } = data.address;
+                                        const calle = road || pedestrian || suburb || '';
+                                        const distrito = city || town || village || '';
+                                        let tempDir = `${calle} ${house_number || ''}`.trim();
+                                        if (distrito) tempDir += `, ${distrito}`;
+                                        if (state) tempDir += ` - ${state}`;
+                                        direccionStr = tempDir.replace(/^[,\s]+|[,\s]+$/g, '');
+                                    } else if(data && data.display_name) {
+                                        direccionStr = data.display_name.split(',').slice(0, 3).join(',');
+                                    }
+                                }
+                            } catch(e) { console.warn("Error resolviendo calle", e); }
+                            
+                            resolve({
+                                lat, lng,
+                                alt: pos.coords.altitude,
+                                direccion: direccionStr,
+                                error: null,
+                                time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                            });
+                        },
+                        (err) => reject(err),
+                        { enableHighAccuracy: true, timeout: 15000 }
                     );
                 });
             };
 
-            const handleFileSelected = async (e) => {
+            const handleFileSelected = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
 
@@ -273,22 +310,16 @@
 
                 if (activeSlot.source === 'camera') {
                     setIsGettingGps(true);
-                    try {
-                        const pos = await getGPS();
+                    getGPSData().then(data => {
+                        setCurrentGps(data);
+                        setIsGettingGps(false);
+                    }).catch(err => {
                         setCurrentGps({
-                            lat: pos.coords.latitude,
-                            lng: pos.coords.longitude,
-                            alt: pos.coords.altitude || null,
-                            acc: pos.coords.accuracy,
+                            error: "GPS No Disponible (Bloqueado por Celular)",
                             time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
                         });
-                    } catch (err) {
-                        setCurrentGps({
-                            error: "GPS No Disponible",
-                            time: new Date().toLocaleString('es-PE', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
-                        });
-                    }
-                    setIsGettingGps(false);
+                        setIsGettingGps(false);
+                    });
                 } else {
                     setCurrentGps(null);
                 }
@@ -296,80 +327,88 @@
             };
 
             const generatePreview = (file, source, angle, gps) => {
-                return new Promise((resolve) => {
+                return new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = (evt) => {
                         const img = new Image();
                         img.onload = () => {
-                            const canvas = document.createElement('canvas');
-                            const ctx = canvas.getContext('2d');
-                            
-                            let targetWidth = img.width;
-                            let targetHeight = img.height;
-                            const MAX_DIM = 2500;
-                            
-                            if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
-                                const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
-                                targetWidth *= ratio;
-                                targetHeight *= ratio;
-                            }
-
-                            // INVERTIR DIMENSIONES REALES SI ESTÁ ROTADO 90° o 270° (Solución Orientación)
-                            if (angle % 180 !== 0) {
-                                canvas.width = targetHeight;
-                                canvas.height = targetWidth;
-                            } else {
-                                canvas.width = targetWidth;
-                                canvas.height = targetHeight;
-                            }
-
-                            // FONDO BLANCO SÓLIDO (Solución Fotos Negras Galería)
-                            ctx.fillStyle = '#ffffff';
-                            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                            // Aplicar rotación y centrado
-                            ctx.translate(canvas.width/2, canvas.height/2);
-                            ctx.rotate((angle * Math.PI) / 180);
-                            
-                            // Dibujar la imagen
-                            ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
-                            
-                            // Resetear matriz
-                            ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-                            // Sello de agua
-                            if (source === 'camera' && gps) {
-                                const fontSize = Math.max(24, canvas.width * 0.025);
-                                ctx.font = `bold ${fontSize}px Arial`;
-                                ctx.textAlign = "right";
-                                ctx.textBaseline = "bottom";
+                            try {
+                                const canvas = document.createElement('canvas');
+                                const ctx = canvas.getContext('2d');
                                 
-                                const margin = fontSize;
-                                let startY = canvas.height - margin;
-                                
-                                const lines = [
-                                    `CREDIBAN PERÚ - Trabajo de Campo`,
-                                    gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`,
-                                ];
-                                
-                                if (!gps.error) {
-                                    lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
-                                    if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
+                                // REDIMENSIÓN DE SEGURIDAD (Evita Pantalla Blanca por falta de RAM)
+                                let targetWidth = img.width;
+                                let targetHeight = img.height;
+                                const MAX_DIM = 2200;
+                                if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
+                                    const ratio = Math.min(MAX_DIM / targetWidth, MAX_DIM / targetHeight);
+                                    targetWidth = Math.floor(targetWidth * ratio);
+                                    targetHeight = Math.floor(targetHeight * ratio);
                                 }
 
-                                lines.reverse().forEach(line => {
-                                    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-                                    ctx.lineWidth = fontSize * 0.2;
-                                    ctx.strokeText(line, canvas.width - margin, startY);
-                                    ctx.fillStyle = '#facc15'; 
-                                    ctx.fillText(line, canvas.width - margin, startY);
-                                    startY -= (fontSize * 1.2);
-                                });
+                                if (angle % 180 !== 0) {
+                                    canvas.width = targetHeight;
+                                    canvas.height = targetWidth;
+                                } else {
+                                    canvas.width = targetWidth;
+                                    canvas.height = targetHeight;
+                                }
+
+                                // FONDO BLANCO SÓLIDO (Seguridad para Galería)
+                                ctx.fillStyle = '#ffffff';
+                                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                                // ROTACIÓN
+                                ctx.translate(canvas.width/2, canvas.height/2);
+                                ctx.rotate((angle * Math.PI) / 180);
+                                ctx.drawImage(img, -targetWidth/2, -targetHeight/2, targetWidth, targetHeight);
+                                ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+                                // SELLO DE AGUA Y CALLES
+                                if (source === 'camera' && gps) {
+                                    const fontSize = Math.max(22, canvas.width * 0.025);
+                                    ctx.font = `bold ${fontSize}px Arial`;
+                                    ctx.textAlign = "right";
+                                    ctx.textBaseline = "bottom";
+                                    
+                                    const margin = fontSize;
+                                    let startY = canvas.height - margin;
+                                    const lines = [];
+                                    
+                                    lines.push(gps.error ? `${gps.time} (${gps.error})` : `${gps.time}`);
+                                    
+                                    if (!gps.error) {
+                                        if (gps.alt) lines.push(`Altitud: ${gps.alt.toFixed(1)} msnm`);
+                                        if (gps.direccion) {
+                                            const parts = gps.direccion.match(/.{1,45}(\s|$)/g) || [];
+                                            parts.reverse().forEach(p => lines.push(p.trim()));
+                                        } else {
+                                            lines.push(`Lat: ${gps.lat.toFixed(6)}  Lng: ${gps.lng.toFixed(6)}`);
+                                        }
+                                    }
+                                    
+                                    if (asesor) lines.push(`Asesor: ${asesor.trim().toUpperCase()}`);
+                                    lines.push(`CREDIBAN PERÚ - Trabajo de Campo`);
+
+                                    lines.forEach(line => {
+                                        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+                                        ctx.lineWidth = fontSize * 0.25;
+                                        ctx.lineJoin = 'round';
+                                        ctx.strokeText(line, canvas.width - margin, startY);
+                                        ctx.fillStyle = '#facc15'; 
+                                        ctx.fillText(line, canvas.width - margin, startY);
+                                        startY -= (fontSize * 1.3);
+                                    });
+                                }
+                                resolve(canvas.toDataURL('image/jpeg', 0.85));
+                            } catch (e) {
+                                reject(e);
                             }
-                            resolve(canvas.toDataURL('image/jpeg', 0.85));
                         };
+                        img.onerror = () => reject("Error al cargar la imagen nativa");
                         img.src = evt.target.result;
                     };
+                    reader.onerror = () => reject("Error al leer archivo");
                     reader.readAsDataURL(file);
                 });
             };
@@ -381,6 +420,12 @@
                         .then(dataUrl => {
                             setPreview(dataUrl);
                             setIsProcessingImage(false);
+                        })
+                        .catch(err => {
+                            console.error(err);
+                            alert("No se pudo procesar la imagen (Posible exceso de tamaño).");
+                            setIsProcessingImage(false);
+                            setStep(2);
                         });
                 }
             }, [currentFile, rotation, currentGps, isGettingGps, step]);
@@ -391,17 +436,11 @@
                     newPages[activeSlot.pageIndex].images[activeSlot.photoIndex] = preview;
                     setPages(newPages);
                 }
-                setPreview(null);
-                setCurrentFile(null);
-                setActiveSlot(null);
-                setStep(2);
+                setPreview(null); setCurrentFile(null); setActiveSlot(null); setStep(2);
             };
 
             const descartarHoja = () => {
-                setPreview(null);
-                setCurrentFile(null);
-                setActiveSlot(null);
-                setStep(2);
+                setPreview(null); setCurrentFile(null); setActiveSlot(null); setStep(2);
             };
 
             const removePhoto = (pageIdx, imgIdx) => {
@@ -413,8 +452,7 @@
             const generarPDF = async (actionType) => {
                 const hasPhotos = pages.some(p => p.images.some(img => img !== null));
                 if (!hasPhotos) {
-                    alert("El documento está vacío. Añade fotos primero.");
-                    return;
+                    alert("El documento está vacío. Añade fotos primero."); return;
                 }
                 setIsGenerating(true);
                 try {
@@ -441,38 +479,27 @@
                             let boxX, boxY, boxW, boxH;
 
                             if (pageData.layout === 1) {
-                                boxX = margin;
-                                boxY = margin;
-                                boxW = pageWidth - (margin * 2);
-                                boxH = pageHeight - (margin * 2);
+                                boxX = margin; boxY = margin;
+                                boxW = pageWidth - (margin * 2); boxH = pageHeight - (margin * 2);
                             } else if (pageData.layout === 2) {
-                                boxW = pageWidth - (margin * 2);
-                                boxH = (pageHeight - (margin * 3)) / 2;
-                                boxX = margin;
-                                boxY = margin + (i * (boxH + margin));
+                                boxW = pageWidth - (margin * 2); boxH = (pageHeight - (margin * 3)) / 2;
+                                boxX = margin; boxY = margin + (i * (boxH + margin));
                             } else if (pageData.layout === 4) {
-                                boxW = (pageWidth - (margin * 3)) / 2;
-                                boxH = (pageHeight - (margin * 3)) / 2;
-                                const col = i % 2;
-                                const row = Math.floor(i / 2);
-                                boxX = margin + (col * (boxW + margin));
-                                boxY = margin + (row * (boxH + margin));
+                                boxW = (pageWidth - (margin * 3)) / 2; boxH = (pageHeight - (margin * 3)) / 2;
+                                const col = i % 2; const row = Math.floor(i / 2);
+                                boxX = margin + (col * (boxW + margin)); boxY = margin + (row * (boxH + margin));
                             }
 
-                            let renderW = boxW;
-                            let renderH = (imgProps.height * renderW) / imgProps.width;
-                            
+                            let renderW = boxW; let renderH = (imgProps.height * renderW) / imgProps.width;
                             if (renderH > boxH) {
-                                renderH = boxH;
-                                renderW = (imgProps.width * renderH) / imgProps.height;
+                                renderH = boxH; renderW = (imgProps.width * renderH) / imgProps.height;
                             }
                             
                             const xOffset = boxX + (boxW - renderW) / 2;
                             const yOffset = boxY + (boxH - renderH) / 2;
 
                             doc.addImage(imgData, 'JPEG', xOffset, yOffset, renderW, renderH, undefined, 'FAST');
-                            doc.setDrawColor(200);
-                            doc.rect(boxX, boxY, boxW, boxH);
+                            doc.setDrawColor(200); doc.rect(boxX, boxY, boxW, boxH);
                         }
                     }
 
@@ -480,10 +507,8 @@
                     const hoy = new Date();
                     const fileName = `${String(hoy.getDate()).padStart(2, '0')}-${String(hoy.getMonth() + 1).padStart(2, '0')}_${nombre.trim().replace(/\s+/g, '')}_${apellido.trim().replace(/\s+/g, '')}-${dni.trim()}.pdf`;
                     
-                    // GUARDAR EN BASE DE DATOS LOCAL
-                    const idRegistro = Date.now().toString();
                     const record = {
-                        id: idRegistro,
+                        id: Date.now().toString(),
                         timestamp: Date.now(),
                         nombre: `${nombre} ${apellido}`,
                         dni: dni,
@@ -493,68 +518,71 @@
                     };
                     await saveExpediente(record);
 
-                    // ACCIONES FINALES
                     if (actionType === 'download') {
                         const url = URL.createObjectURL(pdfBlob);
                         const a = document.createElement('a');
-                        a.href = url;
-                        a.download = fileName;
-                        a.click();
+                        a.href = url; a.download = fileName; a.click();
                         alert("✅ PDF Guardado en tus archivos.");
                     } else if (actionType === 'whatsapp') {
                         const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
-                        const txtMsg = `Estimado cliente, adjunto su expediente digitalizado.\nTitular: ${nombre} ${apellido}\nDNI: ${dni}`;
+                        const txtMsg = `Estimado cliente, adjunto su expediente digitalizado.\nTitular: ${nombre} ${apellido}\nDNI: ${dni}\nAsesor: ${asesor}`;
 
                         if (navigator.canShare && navigator.canShare({ files: [file] })) {
                             await navigator.share({ files: [file], title: `Expediente CREDIBAN`, text: txtMsg });
                         } else {
                             const url = URL.createObjectURL(pdfBlob);
                             const a = document.createElement('a');
-                            a.href = url;
-                            a.download = fileName;
-                            a.click();
-                            const msg = encodeURIComponent(`${txtMsg}\n(Favor de adjuntar el PDF descargado manualmente).`);
-                            window.open(`https://wa.me/?text=${msg}`, '_blank');
+                            a.href = url; a.download = fileName; a.click();
+                            window.open(`https://wa.me/?text=${encodeURIComponent(txtMsg + "\n(Favor adjuntar PDF descargado)")}`, '_blank');
                         }
                     }
                     
-                    // Limpiar y enviar a historial
-                    setPages([]);
-                    setNombre(''); setApellido(''); setDni('');
-                    setStep(1);
-                    setCurrentTab('history');
+                    setPages([]); setNombre(''); setApellido(''); setDni('');
+                    setStep(1); setCurrentTab('history');
 
                 } catch (error) {
-                    console.error("Error:", error);
-                    alert("Error al generar PDF.");
+                    console.error("Error PDF:", error); alert("Error al generar PDF.");
                 } finally {
                     setIsGenerating(false);
                 }
             };
 
             // ==========================================
-            // COMPONENTE HEADER CON PESTAÑAS
+            // COMPONENTE HEADER - CON INDICADOR GPS
             // ==========================================
             const Header = () => (
                 <header className="bg-white shadow-sm border-b border-slate-200 py-3 px-4 w-full z-50 sticky top-0">
                     <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-auto flex-shrink-0 logo-hover">
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240" className="w-full h-full">
-                                    <g fill="#59B447">
-                                        <rect x="90" y="8" width="24" height="13" rx="6.5" className="animate-pulse"/>
-                                        <rect x="71" y="31" width="61" height="13" rx="6.5" style={{animationDelay: "100ms"}} className="animate-pulse"/>
-                                        <rect x="50" y="55" width="74" height="13" rx="6.5" style={{animationDelay: "200ms"}} className="animate-pulse"/>
-                                        <rect x="31" y="79" width="75" height="13" rx="6.5" style={{animationDelay: "300ms"}} className="animate-pulse"/>
-                                        <rect x="24" y="103" width="63" height="13" rx="6.5" style={{animationDelay: "400ms"}} className="animate-pulse"/>
-                                        <rect x="37" y="128" width="24" height="13" rx="6.5" style={{animationDelay: "500ms"}} className="animate-pulse"/>
-                                        <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/>
-                                    </g>
-                                </svg>
+                        
+                        <div className="flex items-center gap-4 w-full justify-between md:justify-start md:w-auto">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-auto flex-shrink-0 logo-hover">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240" className="w-full h-full">
+                                        <g fill="#59B447">
+                                            <rect x="90" y="8" width="24" height="13" rx="6.5" className="animate-pulse"/>
+                                            <rect x="71" y="31" width="61" height="13" rx="6.5" style={{animationDelay: "100ms"}} className="animate-pulse"/>
+                                            <rect x="50" y="55" width="74" height="13" rx="6.5" style={{animationDelay: "200ms"}} className="animate-pulse"/>
+                                            <rect x="31" y="79" width="75" height="13" rx="6.5" style={{animationDelay: "300ms"}} className="animate-pulse"/>
+                                            <rect x="24" y="103" width="63" height="13" rx="6.5" style={{animationDelay: "400ms"}} className="animate-pulse"/>
+                                            <rect x="37" y="128" width="24" height="13" rx="6.5" style={{animationDelay: "500ms"}} className="animate-pulse"/>
+                                            <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/>
+                                        </g>
+                                    </svg>
+                                </div>
+                                <div className="flex flex-col justify-center text-left">
+                                    <span className="text-[#59B447] font-bold text-2xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
+                                </div>
                             </div>
-                            <div className="flex flex-col justify-center text-left">
-                                <span className="text-[#59B447] font-bold text-2xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
-                                <span className="text-[#59B447] font-bold text-[9px] leading-tight tracking-wide mt-1 uppercase" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>empieza a construir tus sueños</span>
+
+                            {/* Semáforo GPS Inteligente */}
+                            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] md:text-xs font-bold border shadow-sm transition-all ${
+                                gpsGlobalStatus === 'listo' ? 'bg-green-50 text-green-700 border-green-200' :
+                                gpsGlobalStatus === 'buscando' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                                'bg-red-50 text-red-600 border-red-200'
+                            }`}>
+                                {gpsGlobalStatus === 'listo' && <><i className="fa-solid fa-location-crosshairs"></i> <span className="hidden sm:inline">GPS Activo</span></>}
+                                {gpsGlobalStatus === 'buscando' && <><i className="fa-solid fa-satellite-dish animate-pulse"></i> <span className="hidden sm:inline">GPS Buscando</span></>}
+                                {gpsGlobalStatus === 'denegado' && <><i className="fa-solid fa-triangle-exclamation"></i> <span className="hidden sm:inline">GPS Bloqueado</span></>}
                             </div>
                         </div>
                         
@@ -563,7 +591,7 @@
                                 <i className="fa-solid fa-camera mr-1"></i> Escanear
                             </button>
                             <button onClick={() => setCurrentTab('history')} className={`flex-1 md:w-40 py-2 text-xs font-bold uppercase rounded-lg transition-all ${currentTab === 'history' ? 'bg-white text-[#59B447] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                                <i className="fa-solid fa-folder-open mr-1"></i> Mis Expedientes
+                                <i className="fa-solid fa-folder-open mr-1"></i> Expedientes
                             </button>
                         </div>
                     </div>
@@ -571,7 +599,7 @@
             );
 
             // ==========================================
-            // VISTA PESTAÑA: MIS EXPEDIENTES
+            // PESTAÑA: HISTORIAL
             // ==========================================
             if (currentTab === 'history') {
                 return (
@@ -583,15 +611,10 @@
                             <div className="flex justify-between items-center mb-6">
                                 <h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-hard-drive text-[#59B447]"></i> Registro Local</h2>
                                 <div className="flex gap-2">
-                                    <button onClick={exportCSV} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm active:scale-95 transition-all">
-                                        <i className="fa-solid fa-download text-blue-600"></i> Exportar CSV
-                                    </button>
-                                    <button onClick={() => csvInputRef.current.click()} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm active:scale-95 transition-all">
-                                        <i className="fa-solid fa-upload text-orange-500"></i> Subir CSV
-                                    </button>
+                                    <button onClick={exportCSV} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm transition-all"><i className="fa-solid fa-download text-blue-600"></i> Exportar</button>
+                                    <button onClick={() => csvInputRef.current.click()} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 shadow-sm transition-all"><i className="fa-solid fa-upload text-orange-500"></i> Subir</button>
                                 </div>
                             </div>
-
                             {historyData.length === 0 ? (
                                 <div className="glass-card rounded-3xl p-10 text-center border-dashed border-2 border-slate-300">
                                     <i className="fa-regular fa-folder-open text-5xl text-slate-300 mb-4 block"></i>
@@ -602,9 +625,7 @@
                                     {historyData.map(record => (
                                         <div key={record.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 hover:shadow-md transition-shadow">
                                             <div className="flex items-center gap-4 w-full sm:w-auto">
-                                                <div className="w-12 h-12 bg-red-50 text-red-500 rounded-xl flex items-center justify-center text-2xl flex-shrink-0">
-                                                    <i className="fa-regular fa-file-pdf"></i>
-                                                </div>
+                                                <div className="w-12 h-12 bg-red-50 text-red-500 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"><i className="fa-regular fa-file-pdf"></i></div>
                                                 <div>
                                                     <p className="font-bold text-slate-800 text-base">{record.nombre}</p>
                                                     <p className="text-xs text-slate-500">DNI: <span className="font-semibold text-slate-600">{record.dni}</span></p>
@@ -612,12 +633,8 @@
                                                 </div>
                                             </div>
                                             <div className="flex gap-2 w-full sm:w-auto">
-                                                <button onClick={() => handleOpenPDF(record.pdfBlob, record.fileName)} className="flex-1 sm:flex-none bg-blue-50 text-blue-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors">
-                                                    <i className="fa-solid fa-folder-open"></i> Abrir
-                                                </button>
-                                                <button onClick={() => handleDeleteRecord(record.id)} className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors">
-                                                    <i className="fa-solid fa-trash-can"></i>
-                                                </button>
+                                                <button onClick={() => handleOpenPDF(record.pdfBlob, record.fileName)} className="flex-1 sm:flex-none bg-blue-50 text-blue-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors"><i className="fa-solid fa-folder-open"></i> Abrir</button>
+                                                <button onClick={() => handleDeleteRecord(record.id)} className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors"><i className="fa-solid fa-trash-can"></i></button>
                                             </div>
                                         </div>
                                     ))}
@@ -629,7 +646,7 @@
             }
 
             // ==========================================
-            // PANTALLA 1: CONFIGURACIÓN 
+            // PANTALLA 1: CONFIGURACIÓN
             // ==========================================
             if (step === 1) {
                 return (
@@ -638,16 +655,26 @@
                         <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-12 flex items-center justify-center">
                             <div className="glass-card p-6 md:p-10 rounded-3xl w-full max-w-3xl shadow-xl border border-slate-200">
                                 <h2 className="text-xl md:text-2xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-4">Apertura de Expediente</h2>
-                                
                                 <form onSubmit={iniciarEscaner} className="space-y-6">
+                                    
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre del Asesor</label>
+                                        <div className="relative">
+                                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
+                                                <i className="fa-solid fa-user-tie"></i>
+                                            </div>
+                                            <input type="text" required value={asesor} onChange={e => setAsesor(e.target.value)} className="w-full pl-12 p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: JUAN PEREZ" />
+                                        </div>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre del Cliente</label>
-                                            <input type="text" required value={nombre} onChange={e => setNombre(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: JUAN" />
+                                            <input type="text" required value={nombre} onChange={e => setNombre(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: CARLOS" />
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Apellido del Cliente</label>
-                                            <input type="text" required value={apellido} onChange={e => setApellido(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: PEREZ" />
+                                            <input type="text" required value={apellido} onChange={e => setApellido(e.target.value.toUpperCase())} className="w-full p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none shadow-sm font-semibold text-slate-700 bg-white" placeholder="Ej: MENDOZA" />
                                         </div>
                                     </div>
                                     
@@ -657,7 +684,7 @@
                                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
                                                 <i className="fa-regular fa-id-card"></i>
                                             </div>
-                                            <input type="tel" maxLength="8" required value={dni} onChange={e => setDni(e.target.value.replace(/\D/g, ''))} className="w-full pl-12 p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] focus:border-[#59B447] outline-none transition-all shadow-sm font-bold tracking-widest text-lg text-slate-700 bg-white" placeholder="12345678" />
+                                            <input type="tel" maxLength="8" required value={dni} onChange={e => setDni(e.target.value.replace(/\D/g, ''))} className="w-full pl-12 p-4 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none shadow-sm font-bold tracking-widest text-lg text-slate-700 bg-white" placeholder="12345678" />
                                         </div>
                                     </div>
 
@@ -688,12 +715,12 @@
                             {isGettingGps ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
                                     <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-satellite-dish text-[#59B447]"></i></div>
-                                    <span className="font-semibold">Obteniendo GPS...</span>
+                                    <span className="font-semibold">Buscando Calles (GPS)...</span>
                                 </div>
                             ) : isProcessingImage ? (
                                 <div className="text-white text-center animate-pulse flex flex-col items-center">
                                     <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-3xl mb-4"><i className="fa-solid fa-spinner fa-spin text-[#59B447]"></i></div>
-                                    <span className="font-semibold">Procesando...</span>
+                                    <span className="font-semibold">Procesando y Sincronizando...</span>
                                 </div>
                             ) : preview ? (
                                 <img src={preview} alt="Previsualización" className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg border border-slate-700" />
@@ -704,10 +731,10 @@
                             <button onClick={descartarHoja} className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-4 rounded-2xl border border-slate-700 transition-all flex flex-col items-center justify-center active:scale-95 shadow-lg">
                                 <i className="fa-solid fa-xmark text-xl mb-1 text-red-400"></i> Rechazar
                             </button>
-                            <button onClick={() => setRotation(r => (r + 90) % 360)} disabled={!preview || isProcessingImage} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-4 rounded-2xl transition-all flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-lg shadow-blue-500/20">
+                            <button onClick={() => setRotation(r => (r + 90) % 360)} disabled={!preview || isProcessingImage} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-4 rounded-2xl transition-all flex flex-col items-center justify-center disabled:opacity-50 active:scale-95 shadow-lg">
                                 <i className="fa-solid fa-rotate-right text-xl mb-1"></i> Girar
                             </button>
-                            <button onClick={aceptarHoja} disabled={!preview || isProcessingImage} className="bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white text-xs font-bold py-4 rounded-2xl transition-all shadow-lg shadow-green-500/30 flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed active:scale-95">
+                            <button onClick={aceptarHoja} disabled={!preview || isProcessingImage} className="bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white text-xs font-bold py-4 rounded-2xl transition-all shadow-lg shadow-green-500/30 flex flex-col items-center justify-center disabled:opacity-50 active:scale-95">
                                 <i className="fa-solid fa-check text-xl mb-1"></i> Aprobar
                             </button>
                         </div>
@@ -728,7 +755,6 @@
                     <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-8">
                         <div className="flex flex-col md:flex-row gap-6 items-start">
                             
-                            {/* COLUMNA IZQUIERDA: Hojas */}
                             <div className="w-full md:w-2/3 flex flex-col gap-5">
                                 <h3 className="text-lg font-bold text-slate-800 mb-1 border-b border-slate-200 pb-2">Contenido del Expediente</h3>
                                 
@@ -780,38 +806,26 @@
                                 )}
                             </div>
 
-                            {/* COLUMNA DERECHA: Controles */}
                             <div className="w-full md:w-1/3 flex flex-col gap-4 md:sticky md:top-24">
                                 <div className="glass-card p-5 rounded-3xl border border-slate-200 shadow-sm">
                                     <div className="flex justify-between items-start mb-2">
-                                        <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center text-[#59B447] mb-2">
-                                            <i className="fa-regular fa-address-card"></i>
-                                        </div>
-                                        <button onClick={() => setStep(1)} className="bg-white text-slate-600 border border-slate-200 p-2 rounded-lg text-xs font-bold shadow-sm active:scale-95">
-                                            <i className="fa-solid fa-pen"></i> Editar
-                                        </button>
+                                        <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center text-[#59B447] mb-2"><i className="fa-regular fa-address-card"></i></div>
+                                        <button onClick={() => setStep(1)} className="bg-white text-slate-600 border border-slate-200 p-2 rounded-lg text-xs font-bold shadow-sm active:scale-95"><i className="fa-solid fa-pen"></i> Editar</button>
                                     </div>
                                     <p className="font-bold text-slate-800 text-lg leading-tight mb-1">{nombre} {apellido}</p>
-                                    <p className="text-xs text-slate-500 font-medium">DNI: <span className="text-slate-700">{dni}</span></p>
+                                    <p className="text-xs text-slate-500 font-medium mb-1">DNI: <span className="text-slate-700">{dni}</span></p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase border-t border-slate-100 pt-2 mt-2">Asesor: <span className="text-slate-600">{asesor}</span></p>
                                 </div>
 
                                 <div className="glass-card rounded-3xl p-5 shadow-sm border border-slate-200">
                                     <label className="block text-xs font-bold text-slate-500 uppercase mb-3 text-center">Añadir Hoja</label>
                                     <div className="grid grid-cols-3 gap-2">
-                                        <button onClick={() => addPage(1)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
-                                            <i className="fa-regular fa-file text-xl mb-1"></i><span className="text-[9px] uppercase">1 Foto</span>
-                                        </button>
-                                        <button onClick={() => addPage(2)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
-                                            <i className="fa-solid fa-grip-lines text-xl mb-1"></i><span className="text-[9px] uppercase">2 Fotos</span>
-                                        </button>
-                                        <button onClick={() => addPage(4)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95">
-                                            <i className="fa-solid fa-border-all text-xl mb-1"></i><span className="text-[9px] uppercase">4 Fotos</span>
-                                        </button>
+                                        <button onClick={() => addPage(1)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95"><i className="fa-regular fa-file text-xl mb-1"></i><span className="text-[9px] uppercase">1 Foto</span></button>
+                                        <button onClick={() => addPage(2)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95"><i className="fa-solid fa-grip-lines text-xl mb-1"></i><span className="text-[9px] uppercase">2 Fotos</span></button>
+                                        <button onClick={() => addPage(4)} className="bg-white border border-slate-200 text-slate-600 hover:text-[#59B447] font-bold py-3 rounded-xl flex flex-col items-center shadow-sm active:scale-95"><i className="fa-solid fa-border-all text-xl mb-1"></i><span className="text-[9px] uppercase">4 Fotos</span></button>
                                     </div>
-                                    <p className="text-[10px] text-slate-400 mt-3 text-center">Tip: Para DNI horizontal, usa el formato de 2 Fotos.</p>
                                 </div>
 
-                                {/* Botones Acción (Escritorio) */}
                                 <div className="hidden md:flex flex-col gap-3 mt-2">
                                     <button onClick={() => generarPDF('download')} disabled={pages.length === 0 || isGenerating} className={`w-full font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm transition-all ${pages.length > 0 ? 'bg-white border-2 border-[#59B447] text-[#59B447] hover:bg-green-50' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}>
                                         <i className="fa-solid fa-download"></i> Guardar PDF
@@ -824,13 +838,12 @@
                         </div>
                     </main>
 
-                    {/* Botones Flotantes (Solo Móvil) */}
                     <div className="md:hidden fixed bottom-0 left-0 w-full bg-white/95 backdrop-blur-md border-t border-slate-200 p-3 pb-5 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-40 flex gap-2">
                         <button onClick={() => generarPDF('download')} disabled={pages.length === 0 || isGenerating} className={`flex-1 font-bold py-3 rounded-xl shadow-sm flex items-center justify-center gap-1 text-xs transition-all ${pages.length > 0 ? 'bg-white border border-[#59B447] text-[#59B447]' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}>
                             <i className="fa-solid fa-download"></i> PDF
                         </button>
                         <button onClick={() => generarPDF('whatsapp')} disabled={pages.length === 0 || isGenerating} className={`flex-[2] font-bold py-3 rounded-xl shadow-md flex items-center justify-center gap-2 text-sm transition-all ${pages.length > 0 ? 'bg-gradient-to-r from-[#25D366] to-[#128C7E] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'}`}>
-                            {isGenerating ? <><i className="fa-solid fa-spinner fa-spin"></i> Generando...</> : <><i className="fa-brands fa-whatsapp text-lg"></i> Enviar</>}
+                            {isGenerating ? <><i className="fa-solid fa-spinner fa-spin"></i> Procesando...</> : <><i className="fa-brands fa-whatsapp text-lg"></i> Enviar</>}
                         </button>
                     </div>
                 </div>
