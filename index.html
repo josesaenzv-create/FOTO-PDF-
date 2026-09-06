@@ -42,7 +42,7 @@
 
     <script type="text/babel">
         // ==========================================
-        // COMPONENTE INTERCEPTOR DE ERRORES (Error Boundary)[cite: 1]
+        // COMPONENTE INTERCEPTOR DE ERRORES (Error Boundary)
         // ==========================================
         class BoundaryGlobal extends React.Component {
             constructor(props) {
@@ -62,7 +62,7 @@
                             <i className="fa-solid fa-triangle-exclamation text-6xl text-red-500 mb-6"></i>
                             <h2 className="text-white text-2xl font-bold mb-3">Límite de Hardware Alcanzado</h2>
                             <p className="text-slate-400 mb-8 max-w-md text-sm leading-relaxed">
-                                La densidad espacial de la imagen excede la capacidad máxima de la memoria de su dispositivo móvil, o el archivo subyacente se halla dañado y corrupto.[cite: 1]
+                                La densidad espacial de la imagen excede la capacidad máxima de la memoria de su dispositivo móvil, o el archivo subyacente se halla dañado y corrupto.
                             </p>
                             <button onClick={() => window.location.reload()} className="bg-[#59B447] hover:bg-[#4a973a] text-white font-bold py-3.5 px-8 rounded-xl shadow-lg active:scale-95 transition-all">
                                 Recargar Aplicación
@@ -129,6 +129,81 @@
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => reject(tx.error);
             });
+        };
+
+        // ==========================================
+        // COMPONENTES DE PANTALLA DE BLOQUEO
+        // ==========================================
+        const OfficialLogo = () => (
+            <div className="flex flex-col items-center gap-3 w-max mx-auto mb-6">
+                <div className="w-16 h-auto flex-shrink-0 logo-hover">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240" className="w-full h-full">
+                        <g fill="#59B447">
+                            <rect x="90" y="8" width="24" height="13" rx="6.5" className="animate-pulse"/>
+                            <rect x="71" y="31" width="61" height="13" rx="6.5" style={{animationDelay: "100ms"}} className="animate-pulse"/>
+                            <rect x="50" y="55" width="74" height="13" rx="6.5" style={{animationDelay: "200ms"}} className="animate-pulse"/>
+                            <rect x="31" y="79" width="75" height="13" rx="6.5" style={{animationDelay: "300ms"}} className="animate-pulse"/>
+                            <rect x="24" y="103" width="63" height="13" rx="6.5" style={{animationDelay: "400ms"}} className="animate-pulse"/>
+                            <rect x="37" y="128" width="24" height="13" rx="6.5" style={{animationDelay: "500ms"}} className="animate-pulse"/>
+                            <path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/>
+                        </g>
+                    </svg>
+                </div>
+                <div className="flex flex-col justify-center text-center">
+                    <span className="text-[#59B447] font-bold text-3xl leading-none tracking-widest drop-shadow-sm" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>CREDIBAN</span>
+                </div>
+            </div>
+        );
+
+        const LockScreen = ({ onLogin }) => {
+            const [password, setPassword] = React.useState('');
+            const [error, setError] = React.useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (password === 'ASESORCB2026') {
+                    onLogin();
+                } else {
+                    setError('Contraseña incorrecta. Acceso denegado.');
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+                    <OfficialLogo />
+                    
+                    <div className="glass-card p-8 rounded-3xl shadow-xl max-w-sm w-full text-center border-t-4 border-[#59B447]">
+                        <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-green-100">
+                            <i className="fa-solid fa-lock text-2xl text-[#59B447]"></i>
+                        </div>
+                        <h2 className="text-xl font-extrabold text-slate-800 mb-2 uppercase tracking-wide">Escáner de Expedientes</h2>
+                        <p className="text-sm text-slate-500 mb-6 font-medium">
+                            Módulo de digitalización de campo. Por favor, ingrese su clave de acceso.
+                        </p>
+                        
+                        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                            <input 
+                                type="password" 
+                                value={password} 
+                                onChange={(e) => {
+                                    setPassword(e.target.value);
+                                    setError('');
+                                }} 
+                                placeholder="Ingresar contraseña..." 
+                                className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-center focus:border-[#59B447] focus:ring-0 outline-none font-bold text-slate-700 transition-colors bg-white"
+                            />
+                            {error && <p className="text-red-500 text-xs font-bold animate-pulse">{error}</p>}
+                            <button 
+                                type="submit" 
+                                className="w-full bg-[#59B447] hover:bg-green-600 text-white font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95 text-sm uppercase tracking-wider mt-2"
+                            >
+                                Desbloquear Sistema
+                            </button>
+                        </form>
+                    </div>
+                    <p className="mt-8 text-xs text-slate-400 font-bold uppercase">Crediban © Todos los derechos reservados</p>
+                </div>
+            );
         };
 
         function EscanerApp() {
@@ -379,7 +454,7 @@
                 e.target.value = ''; 
             };
 
-            // MOTOR VISUAL REESCRITO (Anti-Pantalla Blanca)[cite: 1]
+            // MOTOR VISUAL REESCRITO (Anti-Pantalla Blanca)
             const generatePreview = (file, source, angle, gps, clienteNombre, asesorNombre) => {
                 return new Promise((resolve, reject) => {
                     const img = new Image();
@@ -387,7 +462,7 @@
                     
                     img.onload = async () => {
                         try {
-                            // DESCODIFICACIÓN EN PARALELO EN HILO SECUNDARIO[cite: 1]
+                            // DESCODIFICACIÓN EN PARALELO EN HILO SECUNDARIO
                             // Evita que el hilo principal se trabe y genere el pantallazo blanco
                             await img.decode();
                             
@@ -459,7 +534,7 @@
                             
                             const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
                             
-                            // ELIMINACIÓN TARDÍA (Solo se borra cuando ya se dibujó en la GPU)[cite: 1]
+                            // ELIMINACIÓN TARDÍA (Solo se borra cuando ya se dibujó en la GPU)
                             URL.revokeObjectURL(objectUrl); 
                             resolve(dataUrl);
                         } catch (e) {
@@ -918,10 +993,23 @@
             );
         }
 
+        // ==========================================
+        // SISTEMA DE ARRANQUE CON PANTALLA DE BLOQUEO
+        // ==========================================
+        const App = () => {
+            const [isAuthenticated, setIsAuthenticated] = React.useState(false);
+
+            if (!isAuthenticated) {
+                return <LockScreen onLogin={() => setIsAuthenticated(true)} />;
+            }
+
+            return <EscanerApp />;
+        };
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(
             <BoundaryGlobal>
-                <EscanerApp />
+                <App />
             </BoundaryGlobal>
         );
     </script>
